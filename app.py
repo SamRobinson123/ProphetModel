@@ -1,15 +1,18 @@
 # Import necessary libraries
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, html, dcc
-from dash.dependencies import Input, Output, State
+from dash import Dash, html, dcc, dash_table, callback, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 import logging
 import numpy as np
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Function definitions remain the same
+# [Your existing function definitions, such as create_prophet_forecast_graph, preprocess_payments, etc.]
 
 # Function to create a Plotly graph for Prophet forecast with actual and forecasted data
 def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual_name, forecast_name, rmse=None,
@@ -84,85 +87,8 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
 
     return fig
 
-# Function to preprocess payments data
-def preprocess_payments(df):
-    if 'EncDate' not in df.columns or 'NetPayment' not in df.columns:
-        logger.error("Missing required columns in payments DataFrame.")
-        raise ValueError("Missing required columns in payments DataFrame.")
-
-    # Drop unnecessary columns
-    columns_to_drop = ['UserFirstName', 'UserLastName', 'ProviderName', 'ResourceName']
-    df = df.drop(columns=columns_to_drop, errors='ignore')
-
-    # Rename columns
-    df = df.rename(columns={'EncDate': 'ds', 'NetPayment': 'y'})
-
-    # Ensure datetime
-    df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-
-    # Drop NaNs and select relevant columns
-    df = df[['ds', 'y']].dropna()
-
-    # Remove non-positive payments
-    df = df[df['y'] > 0]
-    logger.info(f"Records after removing non-positive payments: {len(df)}")
-
-    # Aggregate monthly
-    df = df.groupby(pd.Grouper(key='ds', freq='M')).sum().reset_index()
-
-    # Downcast data types
-    df['y'] = pd.to_numeric(df['y'], downcast='float')
-
-    return df
-
-# Function to preprocess visits data
-def preprocess_visits(df):
-    if 'EncDate' not in df.columns:
-        logger.error("Missing 'EncDate' column in visits DataFrame.")
-        raise ValueError("Missing 'EncDate' column in visits DataFrame.")
-
-    # Rename and ensure datetime
-    df = df.rename(columns={'EncDate': 'ds'})
-    df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-    df = df.dropna(subset=['ds'])
-
-    # Count visits monthly
-    df = df.groupby(pd.Grouper(key='ds', freq='M')).size().reset_index(name='y')
-
-    # Remove negative visit counts
-    df = df[df['y'] >= 0]
-    logger.info(f"Records after ensuring non-negative visits: {len(df)}")
-
-    # Downcast data types
-    df['y'] = pd.to_numeric(df['y'], downcast='integer')
-
-    return df
-
-# Function to calculate CAGR
-def calculate_cagr(start_value, end_value, periods_in_years):
-    if start_value <= 0:
-        return None
-    cagr = ((end_value / start_value) ** (1 / periods_in_years) - 1) * 100
-    return cagr
-
-# Function to validate DataFrame
-def validate_dataframe(df, name):
-    if not isinstance(df, pd.DataFrame):
-        logger.error(f"{name} is not a DataFrame.")
-        raise TypeError(f"{name} must be a pandas DataFrame.")
-
-    required_columns = {'ds', 'y'}
-    if not required_columns.issubset(df.columns):
-        logger.error(f"{name} does not contain required columns: {required_columns}")
-        raise ValueError(f"{name} must contain columns: {required_columns}")
-
-    if df[['ds', 'y']].isnull().any().any():
-        logger.error(f"{name} contains NaN values in 'ds' or 'y' columns.")
-        raise ValueError(f"{name} cannot contain NaN values in 'ds' or 'y' columns.")
-
-    if len(df) < 2:
-        logger.error(f"{name} has less than 2 records.")
-        raise ValueError(f"{name} must have at least 2 records for Prophet forecasting.")
+# Other function definitions (preprocess_payments, preprocess_visits, calculate_cagr, validate_dataframe)
+# ... [Include the rest of your function definitions here]
 
 # Read and preprocess the data
 try:
@@ -598,10 +524,131 @@ app.layout = dbc.Container([
 
 ], fluid=True)
 
-# Callback functions remain unchanged
+# Callback functions
 
-# Run the server
+# Callback to update the break-even graph and metrics
+@app.callback(
+    Output('break-even-graph', 'figure'),
+    Output('bea-bep-visits', 'children'),
+    Output('bea-bep-dollars', 'children'),
+    Output('bea-time-to-bep', 'children'),
+    Input('refresh-button', 'n_clicks'),
+    State('cost-per-visit', 'value'),
+    State('avg-payment-per-visitor', 'value'),
+    State('initial-visitors', 'value'),
+    State('startup-costs', 'value'),
+    State('visitor-cagr', 'value'),
+)
+def update_break_even_graph(n_clicks, cost_per_visit, avg_payment_per_visitor, initial_visitors, startup_costs, visitor_cagr):
+    try:
+        # Calculate monthly visitors over 60 months
+        months = np.arange(1, 61)
+        visitor_growth_rate = visitor_cagr / 100
+        monthly_growth_rate = (1 + visitor_growth_rate) ** (1/12) - 1
+        visitors = initial_visitors * (1 + monthly_growth_rate) ** months
+
+        # Calculate revenue and costs
+        revenue = visitors * avg_payment_per_visitor
+        costs = visitors * cost_per_visit + startup_costs
+
+        # Cumulative revenue and costs
+        cumulative_revenue = np.cumsum(revenue)
+        cumulative_costs = np.cumsum(costs)
+
+        # Find break-even point
+        profit = cumulative_revenue - cumulative_costs
+        bep_index = np.argmax(profit >= 0)
+        if profit[bep_index] < 0:
+            time_to_bep = "Not reached within 60 months"
+            bep_visits = "N/A"
+            bep_dollars = "N/A"
+        else:
+            time_to_bep = f"{months[bep_index]} months"
+            bep_visits = f"{int(visitors[bep_index]):,}"
+            bep_dollars = f"${int(cumulative_revenue[bep_index]):,}"
+        
+        # Create the figure
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=months,
+            y=cumulative_revenue,
+            mode='lines',
+            name='Cumulative Revenue',
+            line=dict(color='green')
+        ))
+        fig.add_trace(go.Scatter(
+            x=months,
+            y=cumulative_costs,
+            mode='lines',
+            name='Cumulative Costs',
+            line=dict(color='red')
+        ))
+        fig.update_layout(
+            title='Break-Even Analysis',
+            xaxis_title='Months',
+            yaxis_title='Amount ($)',
+            template='plotly_white',
+            height=600,
+            margin=dict(l=60, r=60, t=50, b=50),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=-0.2,
+                xanchor="center",
+                x=0.5
+            )
+        )
+        return fig, bep_visits, bep_dollars, time_to_bep
+
+    except Exception as e:
+        logger.error(f"Error in update_break_even_graph callback: {e}")
+        return no_update, no_update, no_update, no_update
+
+# Callbacks for the download buttons
+@app.callback(
+    Output("download-payments-wj-data", "data"),
+    Input("download-payments-wj-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_payments_wj(n_clicks):
+    return dcc.send_data_frame(payments_forecast_wj.to_csv, "payments_forecast_wj.csv")
+
+@app.callback(
+    Output("download-visits-wj-data", "data"),
+    Input("download-visits-wj-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_visits_wj(n_clicks):
+    return dcc.send_data_frame(visits_forecast_wj.to_csv, "visits_forecast_wj.csv")
+
+@app.callback(
+    Output("download-payments-entire-data", "data"),
+    Input("download-payments-entire-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_payments_entire(n_clicks):
+    return dcc.send_data_frame(payments_forecast_entire.to_csv, "payments_forecast_entire.csv")
+
+@app.callback(
+    Output("download-visits-entire-data", "data"),
+    Input("download-visits-entire-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def download_visits_entire(n_clicks):
+    return dcc.send_data_frame(visits_forecast_entire.to_csv, "visits_forecast_entire.csv")
+
+# Callback for Help modal
+@app.callback(
+    Output("help-modal", "is_open"),
+    [Input("open-help", "n_clicks"), Input("close-help", "n_clicks")],
+    [State("help-modal", "is_open")],
+)
+def toggle_help_modal(n1, n2, is_open):
+    if n1 or n2:
+        return not is_open
+    return is_open
+
 # Remove or comment out the app.run_server() block when using Gunicorn
 # if __name__ == "__main__":
-#     import os
-#     app.run_server(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 8050)))
+#     app.run_server(debug=False)
+
