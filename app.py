@@ -7,10 +7,14 @@ from dash import Dash, html, dcc, Input, Output, State, no_update
 import dash_bootstrap_components as dbc
 import logging
 import numpy as np
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Get the base directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Function to create a Plotly graph for Prophet forecast
 def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual_name, forecast_name, rmse=None,
@@ -94,27 +98,27 @@ def calculate_cagr(start_value, end_value, periods_in_years):
 
 # Load precomputed forecasts
 try:
-    payments_forecast_wj = pd.read_csv('payments_forecast_wj.csv', parse_dates=['ds'])
-    visits_forecast_wj = pd.read_csv('visits_forecast_wj.csv', parse_dates=['ds'])
-    payments_forecast_entire = pd.read_csv('payments_forecast_entire.csv', parse_dates=['ds'])
-    visits_forecast_entire = pd.read_csv('visits_forecast_entire.csv', parse_dates=['ds'])
+    payments_forecast_wj = pd.read_csv(os.path.join(BASE_DIR, 'payments_forecast_wj.csv'), parse_dates=['ds'])
+    visits_forecast_wj = pd.read_csv(os.path.join(BASE_DIR, 'visits_forecast_wj.csv'), parse_dates=['ds'])
+    payments_forecast_entire = pd.read_csv(os.path.join(BASE_DIR, 'payments_forecast_entire.csv'), parse_dates=['ds'])
+    visits_forecast_entire = pd.read_csv(os.path.join(BASE_DIR, 'visits_forecast_entire.csv'), parse_dates=['ds'])
     logger.info("Loaded precomputed forecasts.")
 except FileNotFoundError as e:
     logger.error(f"Error loading forecasts: {e}")
     raise
 
 # Load metrics
-payments_metrics_wj = pd.read_csv('payments_metrics_wj.csv').to_dict('records')[0]
-visits_metrics_wj = pd.read_csv('visits_metrics_wj.csv').to_dict('records')[0]
-payments_metrics_entire = pd.read_csv('payments_metrics_entire.csv').to_dict('records')[0]
-visits_metrics_entire = pd.read_csv('visits_metrics_entire.csv').to_dict('records')[0]
+payments_metrics_wj = pd.read_csv(os.path.join(BASE_DIR, 'payments_metrics_wj.csv')).to_dict('records')[0]
+visits_metrics_wj = pd.read_csv(os.path.join(BASE_DIR, 'visits_metrics_wj.csv')).to_dict('records')[0]
+payments_metrics_entire = pd.read_csv(os.path.join(BASE_DIR, 'payments_metrics_entire.csv')).to_dict('records')[0]
+visits_metrics_entire = pd.read_csv(os.path.join(BASE_DIR, 'visits_metrics_entire.csv')).to_dict('records')[0]
 logger.info("Loaded precomputed metrics.")
 
 # Load actual data
-west_jordan_payments = pd.read_csv('west_jordan_payments.csv', parse_dates=['ds'])
-west_jordan_visits = pd.read_csv('west_jordan_visits.csv', parse_dates=['ds'])
-entire_payments = pd.read_csv('entire_payments.csv', parse_dates=['ds'])
-entire_visits = pd.read_csv('entire_visits.csv', parse_dates=['ds'])
+west_jordan_payments = pd.read_csv(os.path.join(BASE_DIR, 'west_jordan_payments.csv'), parse_dates=['ds'])
+west_jordan_visits = pd.read_csv(os.path.join(BASE_DIR, 'west_jordan_visits.csv'), parse_dates=['ds'])
+entire_payments = pd.read_csv(os.path.join(BASE_DIR, 'entire_payments.csv'), parse_dates=['ds'])
+entire_visits = pd.read_csv(os.path.join(BASE_DIR, 'entire_visits.csv'), parse_dates=['ds'])
 
 # Calculate Historical CAGR
 payments_cagr_wj = calculate_cagr(
@@ -251,7 +255,7 @@ app.layout = dbc.Container([
                             dcc.Input(
                                 id='avg-payment-per-visitor',
                                 type='number',
-                                value=average_payment_wj,
+                                value=round(average_payment_wj, 2),
                                 min=0,
                                 step=10,
                                 style={'width': '100%'}
@@ -296,7 +300,7 @@ app.layout = dbc.Container([
                             dcc.Input(
                                 id='visitor-cagr',
                                 type='number',
-                                value=visits_cagr_wj,
+                                value=round(visits_cagr_wj, 2) if visits_cagr_wj else 0,
                                 min=-100,
                                 max=100,
                                 step=0.1,
