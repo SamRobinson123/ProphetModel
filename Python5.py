@@ -8,6 +8,7 @@ from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
 import logging
 from datetime import datetime
+import openpyxl
 import numpy as np
 
 # Configure logging
