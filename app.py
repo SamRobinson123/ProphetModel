@@ -1,6 +1,5 @@
 # Import necessary libraries
 import pandas as pd
-from prophet import Prophet
 import plotly.graph_objects as go
 from dash import Dash, html, dcc
 from dash.dependencies import Input, Output, State
@@ -204,22 +203,23 @@ validate_dataframe(west_jordan_visits, "west_jordan_visits")
 validate_dataframe(entire_payments, "entire_payments")
 validate_dataframe(entire_visits, "entire_visits")
 
-# Load precomputed forecasts
+# Load precomputed forecasts and metrics
 try:
     payments_forecast_wj = pd.read_csv('payments_forecast_wj.csv', parse_dates=['ds'])
     visits_forecast_wj = pd.read_csv('visits_forecast_wj.csv', parse_dates=['ds'])
     payments_forecast_entire = pd.read_csv('payments_forecast_entire.csv', parse_dates=['ds'])
     visits_forecast_entire = pd.read_csv('visits_forecast_entire.csv', parse_dates=['ds'])
     logger.info("Loaded precomputed forecasts.")
-except FileNotFoundError:
-    logger.error("Precomputed forecast files not found.")
-    raise
 
-# Calculate metrics (Precomputed or set to None)
-payments_metrics_wj = {'RMSE': None, 'MAPE': None}
-visits_metrics_wj = {'RMSE': None, 'MAPE': None}
-payments_metrics_entire = {'RMSE': None, 'MAPE': None}
-visits_metrics_entire = {'RMSE': None, 'MAPE': None}
+    # Load precomputed metrics
+    payments_metrics_wj = pd.read_csv('payments_metrics_wj.csv').to_dict('records')[0]
+    visits_metrics_wj = pd.read_csv('visits_metrics_wj.csv').to_dict('records')[0]
+    payments_metrics_entire = pd.read_csv('payments_metrics_entire.csv').to_dict('records')[0]
+    visits_metrics_entire = pd.read_csv('visits_metrics_entire.csv').to_dict('records')[0]
+    logger.info("Loaded precomputed metrics.")
+except FileNotFoundError:
+    logger.error("Precomputed forecast or metrics files not found.")
+    raise
 
 # Calculate Historical CAGR
 payments_cagr_wj = calculate_cagr(
@@ -270,6 +270,8 @@ payments_fig_wj = create_prophet_forecast_graph(
     y_title="Payments ($)",
     actual_name="Actual Payments",
     forecast_name="Forecasted Payments",
+    rmse=payments_metrics_wj['RMSE'],
+    mape=payments_metrics_wj['MAPE'],
     cagr=payments_cagr_wj if payments_cagr_wj is not None else 0
 )
 
@@ -280,6 +282,8 @@ visits_fig_wj = create_prophet_forecast_graph(
     y_title="Visits",
     actual_name="Actual Visits",
     forecast_name="Forecasted Visits",
+    rmse=visits_metrics_wj['RMSE'],
+    mape=visits_metrics_wj['MAPE'],
     cagr=initial_visitor_cagr
 )
 
@@ -290,6 +294,8 @@ payments_fig_entire = create_prophet_forecast_graph(
     y_title="Payments ($)",
     actual_name="Actual Payments",
     forecast_name="Forecasted Payments",
+    rmse=payments_metrics_entire['RMSE'],
+    mape=payments_metrics_entire['MAPE'],
     cagr=payments_cagr_entire if payments_cagr_entire is not None else 0
 )
 
@@ -300,6 +306,8 @@ visits_fig_entire = create_prophet_forecast_graph(
     y_title="Visits",
     actual_name="Actual Visits",
     forecast_name="Forecasted Visits",
+    rmse=visits_metrics_entire['RMSE'],
+    mape=visits_metrics_entire['MAPE'],
     cagr=visits_cagr_entire if visits_cagr_entire is not None else 0
 )
 
@@ -453,14 +461,20 @@ app.layout = dbc.Container([
             dbc.Card([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
-                    # Average Payment per Visitor Metric
                     dbc.Row([
-                        dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=6),
-                        dbc.Col(f"${average_payment_wj:.2f}", width=6),
+                        dbc.Col(html.Strong("RMSE:"), width=3),
+                        dbc.Col(f"{payments_metrics_wj['RMSE']:.2f}", width=3),
+                        dbc.Col(html.Strong("MAPE:"), width=3),
+                        dbc.Col(f"{payments_metrics_wj['MAPE']:.2f}%", width=3),
                     ], className="mb-2"),
                     dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=6),
-                        dbc.Col(f"{payments_cagr_wj:.2f}%" if payments_cagr_wj else "N/A", width=6),
+                        dbc.Col(html.Strong("CAGR:"), width=3),
+                        dbc.Col(f"{payments_cagr_wj:.2f}%" if payments_cagr_wj else "N/A", width=3),
+                    ], className="mb-2"),
+                    # Average Payment per Visitor Metric
+                    dbc.Row([
+                        dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=3),
+                        dbc.Col(f"${average_payment_wj:.2f}", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -474,8 +488,14 @@ app.layout = dbc.Container([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
                     dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=6),
-                        dbc.Col(f"{initial_visitor_cagr:.2f}%", width=6),
+                        dbc.Col(html.Strong("RMSE:"), width=3),
+                        dbc.Col(f"{visits_metrics_wj['RMSE']:.2f}", width=3),
+                        dbc.Col(html.Strong("MAPE:"), width=3),
+                        dbc.Col(f"{visits_metrics_wj['MAPE']:.2f}%", width=3),
+                    ], className="mb-2"),
+                    dbc.Row([
+                        dbc.Col(html.Strong("CAGR:"), width=3),
+                        dbc.Col(f"{initial_visitor_cagr:.2f}%", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -490,14 +510,20 @@ app.layout = dbc.Container([
             dbc.Card([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
-                    # Average Payment per Visitor Metric
                     dbc.Row([
-                        dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=6),
-                        dbc.Col(f"${average_payment_entire:.2f}", width=6),
+                        dbc.Col(html.Strong("RMSE:"), width=3),
+                        dbc.Col(f"{payments_metrics_entire['RMSE']:.2f}", width=3),
+                        dbc.Col(html.Strong("MAPE:"), width=3),
+                        dbc.Col(f"{payments_metrics_entire['MAPE']:.2f}%", width=3),
                     ], className="mb-2"),
                     dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=6),
-                        dbc.Col(f"{payments_cagr_entire:.2f}%" if payments_cagr_entire else "N/A", width=6),
+                        dbc.Col(html.Strong("CAGR:"), width=3),
+                        dbc.Col(f"{payments_cagr_entire:.2f}%" if payments_cagr_entire else "N/A", width=3),
+                    ], className="mb-2"),
+                    # Average Payment per Visitor Metric
+                    dbc.Row([
+                        dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=3),
+                        dbc.Col(f"${average_payment_entire:.2f}", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -511,8 +537,14 @@ app.layout = dbc.Container([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
                     dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=6),
-                        dbc.Col(f"{visits_cagr_entire:.2f}%" if visits_cagr_entire else "N/A", width=6),
+                        dbc.Col(html.Strong("RMSE:"), width=3),
+                        dbc.Col(f"{visits_metrics_entire['RMSE']:.2f}", width=3),
+                        dbc.Col(html.Strong("MAPE:"), width=3),
+                        dbc.Col(f"{visits_metrics_entire['MAPE']:.2f}%", width=3),
+                    ], className="mb-2"),
+                    dbc.Row([
+                        dbc.Col(html.Strong("CAGR:"), width=3),
+                        dbc.Col(f"{visits_cagr_entire:.2f}%" if visits_cagr_entire else "N/A", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
