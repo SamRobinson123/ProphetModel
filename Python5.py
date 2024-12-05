@@ -19,25 +19,10 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
                                   mape=None, cagr=None):
     """
     Creates a Plotly graph for Prophet forecasts, displaying actual and forecasted data with confidence intervals.
-
-    Parameters:
-    - actual_df (DataFrame): Actual historical data with 'ds' and 'y' columns.
-    - forecast_df (DataFrame): Forecasted data from Prophet with 'ds', 'yhat', 'yhat_lower', 'yhat_upper'.
-    - title (str): Title of the graph.
-    - y_title (str): Y-axis title.
-    - actual_name (str): Label for actual data.
-    - forecast_name (str): Label for forecasted data.
-    - rmse (float, optional): Root Mean Squared Error metric.
-    - mape (float, optional): Mean Absolute Percentage Error metric.
-    - cagr (float, optional): Compound Annual Growth Rate metric.
-
-    Returns:
-    - fig (Figure): Plotly Figure object.
     """
-    # Create the figure
     fig = go.Figure()
 
-    # Add actual data (blue line with markers)
+    # Add actual data
     fig.add_trace(go.Scatter(
         x=actual_df['ds'],
         y=actual_df['y'],
@@ -47,7 +32,7 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
         marker=dict(size=5)
     ))
 
-    # Add forecasted data (green line)
+    # Add forecasted data
     fig.add_trace(go.Scatter(
         x=forecast_df['ds'],
         y=forecast_df['yhat'],
@@ -56,7 +41,7 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
         line=dict(color='green', width=3)
     ))
 
-    # Add upper confidence interval (dashed green line)
+    # Add confidence intervals
     fig.add_trace(go.Scatter(
         x=forecast_df['ds'],
         y=forecast_df['yhat_upper'],
@@ -65,8 +50,6 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
         line=dict(color='lightgreen', dash='dash'),
         showlegend=False
     ))
-
-    # Add lower confidence interval (dashed green line)
     fig.add_trace(go.Scatter(
         x=forecast_df['ds'],
         y=forecast_df['yhat_lower'],
@@ -86,12 +69,9 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
         if metrics_text:
             metrics_text += ", "
         metrics_text += f"CAGR: {cagr:.2f}%"
-    if metrics_text:
-        title_with_metrics = f"{title}<br>{metrics_text}"
-    else:
-        title_with_metrics = title
+    title_with_metrics = f"{title}<br>{metrics_text}" if metrics_text else title
 
-    # Update the layout for titles and axes
+    # Update the layout
     fig.update_layout(
         title=title_with_metrics,
         xaxis_title="Date",
@@ -113,17 +93,10 @@ def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual
 # Function to preprocess payments data
 def preprocess_payments(df):
     """
-    Preprocesses the payments DataFrame by renaming columns, converting dates, removing invalid entries,
-    and aggregating data monthly.
-
-    Parameters:
-    - df (DataFrame): Raw payments data.
-
-    Returns:
-    - df (DataFrame): Preprocessed payments data with 'ds' and 'y' columns.
+    Preprocesses the payments DataFrame.
     """
     if 'EncDate' not in df.columns or 'NetPayment' not in df.columns:
-        logger.error("The DataFrame does not contain required columns: 'EncDate', 'NetPayment'.")
+        logger.error("Missing required columns in payments DataFrame.")
         raise ValueError("Missing required columns in payments DataFrame.")
 
     # Drop unnecessary columns
@@ -141,9 +114,9 @@ def preprocess_payments(df):
 
     # Remove non-positive payments
     df = df[df['y'] > 0]
-    logger.info(f"Number of records after removing non-positive payments: {len(df)}")
+    logger.info(f"Records after removing non-positive payments: {len(df)}")
 
-    # Aggregate monthly using Month-End frequency ('ME')
+    # Aggregate monthly
     df = df.groupby(pd.Grouper(key='ds', freq='ME')).sum().reset_index()
 
     return df
@@ -151,110 +124,55 @@ def preprocess_payments(df):
 # Function to preprocess visits data
 def preprocess_visits(df):
     """
-    Preprocesses the visits DataFrame by renaming columns, converting dates, removing invalid entries,
-    and aggregating data monthly.
-
-    Parameters:
-    - df (DataFrame): Raw visits data.
-
-    Returns:
-    - df (DataFrame): Preprocessed visits data with 'ds' and 'y' columns.
+    Preprocesses the visits DataFrame.
     """
     if 'EncDate' not in df.columns:
-        logger.error("The DataFrame does not contain the 'EncDate' column.")
+        logger.error("Missing 'EncDate' column in visits DataFrame.")
         raise ValueError("Missing 'EncDate' column in visits DataFrame.")
 
-    # Rename 'EncDate' to 'ds'
+    # Rename and ensure datetime
     df = df.rename(columns={'EncDate': 'ds'})
-
-    # Ensure datetime
     df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-
-    # Drop rows with invalid dates
     df = df.dropna(subset=['ds'])
 
-    # Count visits using Month-End frequency ('ME')
+    # Count visits monthly
     df = df.groupby(pd.Grouper(key='ds', freq='ME')).size().reset_index(name='y')
 
-    # Remove negative visit counts (if any)
+    # Remove negative visit counts
     df = df[df['y'] >= 0]
-    logger.info(f"Number of records after ensuring non-negative visits: {len(df)}")
+    logger.info(f"Records after ensuring non-negative visits: {len(df)}")
 
     return df
 
-# Function to train Prophet model for payments
-def train_prophet_payments(df, periods=60):
+# Function to train Prophet model
+def train_prophet(df, periods=60):
     """
-    Trains a Prophet model on the payments data and generates forecasts.
-
-    Parameters:
-    - df (DataFrame): Preprocessed payments data with 'ds' and 'y' columns.
-    - periods (int): Number of future periods to forecast (default: 60 months).
-
-    Returns:
-    - model (Prophet): Trained Prophet model.
-    - forecast (DataFrame): Forecasted data.
+    Trains a Prophet model and generates forecasts.
     """
     model = Prophet()
     model.fit(df)
     future = model.make_future_dataframe(periods=periods, freq='ME')
     forecast = model.predict(future)
-    return model, forecast
-
-# Function to train Prophet model for visits
-def train_prophet_visits(df, periods=60):
-    """
-    Trains a Prophet model on the visits data and generates forecasts.
-
-    Parameters:
-    - df (DataFrame): Preprocessed visits data with 'ds' and 'y' columns.
-    - periods (int): Number of future periods to forecast (default: 60 months).
-
-    Returns:
-    - model (Prophet): Trained Prophet model.
-    - forecast (DataFrame): Forecasted data.
-    """
-    model = Prophet()
-    model.fit(df)
-    future = model.make_future_dataframe(periods=periods, freq='ME')
-    forecast = model.predict(future)
-    return model, forecast
+    return forecast
 
 # Function to calculate performance metrics
-def calculate_metrics(df, forecast):
+def calculate_metrics(actual, predicted):
     """
-    Calculates performance metrics (RMSE and MAPE) between actual and forecasted data.
-
-    Parameters:
-    - df (DataFrame): Actual historical data with 'y' column.
-    - forecast (DataFrame): Forecasted data with 'yhat' column.
-
-    Returns:
-    - metrics (dict): Dictionary containing RMSE and MAPE.
+    Calculates performance metrics between actual and predicted data.
     """
-    actual = df['y']
-    predicted = forecast['yhat'][:len(actual)]
     mae = mean_absolute_error(actual, predicted)
     mse = mean_squared_error(actual, predicted)
     rmse = mse ** 0.5
-    mape = mean_absolute_percentage_error(actual, predicted) * 100  # Convert to percentage
+    mape = mean_absolute_percentage_error(actual, predicted) * 100
     return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
 
 # Function to calculate CAGR
 def calculate_cagr(start_value, end_value, periods_in_years):
     """
     Calculates the Compound Annual Growth Rate (CAGR).
-
-    Parameters:
-    - start_value (float): Initial value.
-    - end_value (float): Final value.
-    - periods_in_years (float): Number of years.
-
-    Returns:
-    - cagr (float or None): CAGR percentage or None if undefined.
     """
     if start_value <= 0:
-        return None  # CAGR is undefined if the start value is zero or negative
+        return None
     cagr = ((end_value / start_value) ** (1 / periods_in_years) - 1) * 100
     return cagr
 
@@ -262,14 +180,6 @@ def calculate_cagr(start_value, end_value, periods_in_years):
 def validate_dataframe(df, name):
     """
     Validates the DataFrame for Prophet forecasting.
-
-    Parameters:
-    - df (DataFrame): DataFrame to validate.
-    - name (str): Name of the DataFrame (for logging).
-
-    Raises:
-    - TypeError: If df is not a DataFrame.
-    - ValueError: If required columns are missing, contain NaNs, or have insufficient rows.
     """
     if not isinstance(df, pd.DataFrame):
         logger.error(f"{name} is not a DataFrame.")
@@ -288,11 +198,11 @@ def validate_dataframe(df, name):
         logger.error(f"{name} has less than 2 records.")
         raise ValueError(f"{name} must have at least 2 records for Prophet forecasting.")
 
-# Read the data
+# Read and preprocess the data
 try:
     payments_df = pd.read_excel("payment.xlsx")
     payments_df = payments_df[payments_df['EncStatus'] == 'CHK']
-    logger.info("Successfully read payment.xlsx and filtered by EncStatus 'CHK'.")
+    logger.info("Successfully read 'payment.xlsx' and filtered by EncStatus 'CHK'.")
 except FileNotFoundError:
     logger.error("The file 'payment.xlsx' was not found.")
     raise
@@ -302,82 +212,50 @@ except Exception as e:
 
 # Filter data for UPFH Family Clinic - West Jordan
 if 'Facility' not in payments_df.columns:
-    logger.error("The DataFrame does not contain the 'Facility' column.")
+    logger.error("Missing 'Facility' column in payments DataFrame.")
     raise ValueError("Missing 'Facility' column in payments DataFrame.")
 
 west_jordan_df = payments_df[payments_df['Facility'] == 'UPFH Family Clinic - West Jordan']
-logger.info(f"Number of records for UPFH Family Clinic - West Jordan: {len(west_jordan_df)}")
+logger.info(f"Records for 'UPFH Family Clinic - West Jordan': {len(west_jordan_df)}")
 
 if west_jordan_df.empty:
-    logger.error("No data found for 'UPFH Family Clinic - West Jordan'. Please check the 'Facility' column values.")
+    logger.error("No data found for 'UPFH Family Clinic - West Jordan'.")
     raise ValueError("No data for 'UPFH Family Clinic - West Jordan'.")
 
-# Verify columns in west_jordan_df
-logger.info("Columns in west_jordan_df: {}".format(west_jordan_df.columns.tolist()))
+# Preprocess data
+west_jordan_payments = preprocess_payments(west_jordan_df)
+west_jordan_visits = preprocess_visits(west_jordan_df)
+logger.info("Preprocessed payments and visits data for West Jordan Clinic.")
 
-# Preprocess data for West Jordan Clinic
-try:
-    west_jordan_payments = preprocess_payments(west_jordan_df)
-    west_jordan_visits = preprocess_visits(west_jordan_df)
-    logger.info("Successfully preprocessed payments and visits data for West Jordan Clinic.")
-except Exception as e:
-    logger.error(f"Error during data preprocessing for West Jordan Clinic: {e}")
-    raise
+entire_payments = preprocess_payments(payments_df)
+entire_visits = preprocess_visits(payments_df)
+logger.info("Preprocessed payments and visits data for Entire Payments Data Set.")
 
-# Validate DataFrames for West Jordan Clinic
+# Validate DataFrames
 validate_dataframe(west_jordan_payments, "west_jordan_payments")
 validate_dataframe(west_jordan_visits, "west_jordan_visits")
-
-# Preprocess data for Entire Payments Data Set
-try:
-    entire_payments = preprocess_payments(payments_df)
-    entire_visits = preprocess_visits(payments_df)
-    logger.info("Successfully preprocessed payments and visits data for Entire Payments Data Set.")
-except Exception as e:
-    logger.error(f"Error during data preprocessing for Entire Payments Data Set: {e}")
-    raise
-
-# Validate DataFrames for Entire Payments Data Set
 validate_dataframe(entire_payments, "entire_payments")
 validate_dataframe(entire_visits, "entire_visits")
 
-# Train Prophet models and get forecasts for West Jordan Clinic (60 months)
-try:
-    payments_model_wj, payments_forecast_wj = train_prophet_payments(west_jordan_payments, periods=60)
-    visits_model_wj, visits_forecast_wj = train_prophet_visits(west_jordan_visits, periods=60)
-    logger.info("Successfully trained Prophet models and generated forecasts for West Jordan Clinic.")
-except Exception as e:
-    logger.error(f"Error during Prophet model training or forecasting for West Jordan Clinic: {e}")
-    raise
+# Train Prophet models and get forecasts
+payments_forecast_wj = train_prophet(west_jordan_payments, periods=60)
+visits_forecast_wj = train_prophet(west_jordan_visits, periods=60)
+logger.info("Trained Prophet models and generated forecasts for West Jordan Clinic.")
 
-# Train Prophet models and get forecasts for Entire Payments Data Set (60 months)
-try:
-    payments_model_entire, payments_forecast_entire = train_prophet_payments(entire_payments, periods=60)
-    visits_model_entire, visits_forecast_entire = train_prophet_visits(entire_visits, periods=60)
-    logger.info("Successfully trained Prophet models and generated forecasts for Entire Payments Data Set.")
-except Exception as e:
-    logger.error(f"Error during Prophet model training or forecasting for Entire Payments Data Set: {e}")
-    raise
+payments_forecast_entire = train_prophet(entire_payments, periods=60)
+visits_forecast_entire = train_prophet(entire_visits, periods=60)
+logger.info("Trained Prophet models and generated forecasts for Entire Payments Data Set.")
 
-# Calculate metrics for West Jordan Clinic
-try:
-    payments_metrics_wj = calculate_metrics(west_jordan_payments, payments_forecast_wj)
-    visits_metrics_wj = calculate_metrics(west_jordan_visits, visits_forecast_wj)
-    logger.info("Successfully calculated performance metrics for West Jordan Clinic.")
-except Exception as e:
-    logger.error(f"Error calculating metrics for West Jordan Clinic: {e}")
-    raise
+# Calculate metrics
+payments_metrics_wj = calculate_metrics(west_jordan_payments['y'], payments_forecast_wj['yhat'][:len(west_jordan_payments)])
+visits_metrics_wj = calculate_metrics(west_jordan_visits['y'], visits_forecast_wj['yhat'][:len(west_jordan_visits)])
+logger.info("Calculated performance metrics for West Jordan Clinic.")
 
-# Calculate metrics for Entire Payments Data Set
-try:
-    payments_metrics_entire = calculate_metrics(entire_payments, payments_forecast_entire)
-    visits_metrics_entire = calculate_metrics(entire_visits, visits_forecast_entire)
-    logger.info("Successfully calculated performance metrics for Entire Payments Data Set.")
-except Exception as e:
-    logger.error(f"Error calculating metrics for Entire Payments Data Set: {e}")
-    raise
+payments_metrics_entire = calculate_metrics(entire_payments['y'], payments_forecast_entire['yhat'][:len(entire_payments)])
+visits_metrics_entire = calculate_metrics(entire_visits['y'], visits_forecast_entire['yhat'][:len(entire_visits)])
+logger.info("Calculated performance metrics for Entire Payments Data Set.")
 
-# Calculate Historical Visitor CAGR for West Jordan Clinic (This will be used to initialize the input field)
+# Calculate Historical CAGR
 payments_cagr_wj = calculate_cagr(
     start_value=west_jordan_payments['y'].iloc[0],
     end_value=west_jordan_payments['y'].iloc[-1],
@@ -390,14 +268,12 @@ visits_cagr_wj = calculate_cagr(
     periods_in_years=5
 )
 
+initial_visitor_cagr = visits_cagr_wj if visits_cagr_wj is not None else 0
 if visits_cagr_wj is None:
-    initial_visitor_cagr = 0  # Default to 0% if historical CAGR is undefined
     logger.warning("Historical Visitor CAGR is undefined. Defaulting to 0%.")
 else:
-    initial_visitor_cagr = visits_cagr_wj
     logger.info(f"Historical Visitor CAGR (West Jordan Clinic, 2020-2025): {initial_visitor_cagr:.2f}%")
 
-# Calculate Historical Visitor CAGR for Entire Payments Data Set (if needed)
 payments_cagr_entire = calculate_cagr(
     start_value=entire_payments['y'].iloc[0],
     end_value=entire_payments['y'].iloc[-1],
@@ -410,16 +286,73 @@ visits_cagr_entire = calculate_cagr(
     periods_in_years=5
 )
 
+initial_visits_cagr_entire = visits_cagr_entire if visits_cagr_entire is not None else 0
 if visits_cagr_entire is None:
-    initial_visits_cagr_entire = 0  # Default to 0% if historical CAGR is undefined
     logger.warning("Historical Visitor CAGR for Entire Data Set is undefined. Defaulting to 0%.")
 else:
-    initial_visits_cagr_entire = visits_cagr_entire
     logger.info(f"Historical Visitor CAGR (Entire Data Set, 2020-2025): {initial_visits_cagr_entire:.2f}%")
 
-# Initialize the Dash app before defining any callbacks
+# Initialize the Dash app
 app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server  # For deployment
+
+# Precompute forecast graphs
+payments_fig_wj = create_prophet_forecast_graph(
+    actual_df=west_jordan_payments,
+    forecast_df=payments_forecast_wj,
+    title="Payments Forecast for West Jordan Clinic",
+    y_title="Payments ($)",
+    actual_name="Actual Payments",
+    forecast_name="Forecasted Payments",
+    rmse=payments_metrics_wj['RMSE'],
+    mape=payments_metrics_wj['MAPE'],
+    cagr=payments_cagr_wj if payments_cagr_wj is not None else 0
+)
+
+visits_fig_wj = create_prophet_forecast_graph(
+    actual_df=west_jordan_visits,
+    forecast_df=visits_forecast_wj,
+    title="Visits Forecast for West Jordan Clinic",
+    y_title="Visits",
+    actual_name="Actual Visits",
+    forecast_name="Forecasted Visits",
+    rmse=visits_metrics_wj['RMSE'],
+    mape=visits_metrics_wj['MAPE'],
+    cagr=initial_visitor_cagr
+)
+
+payments_fig_entire = create_prophet_forecast_graph(
+    actual_df=entire_payments,
+    forecast_df=payments_forecast_entire,
+    title="Payments Forecast for Entire Data Set",
+    y_title="Payments ($)",
+    actual_name="Actual Payments",
+    forecast_name="Forecasted Payments",
+    rmse=payments_metrics_entire['RMSE'],
+    mape=payments_metrics_entire['MAPE'],
+    cagr=payments_cagr_entire if payments_cagr_entire is not None else 0
+)
+
+visits_fig_entire = create_prophet_forecast_graph(
+    actual_df=entire_visits,
+    forecast_df=visits_forecast_entire,
+    title="Visits Forecast for Entire Data Set",
+    y_title="Visits",
+    actual_name="Actual Visits",
+    forecast_name="Forecasted Visits",
+    rmse=visits_metrics_entire['RMSE'],
+    mape=visits_metrics_entire['MAPE'],
+    cagr=visits_cagr_entire if visits_cagr_entire is not None else 0
+)
+
+# Calculate Average Payment per Visitor (Precomputed)
+merged_wj = west_jordan_payments.merge(west_jordan_visits, on='ds', suffixes=('_payments', '_visits'))
+merged_wj['avg_payment_per_visitor'] = merged_wj['y_payments'] / merged_wj['y_visits']
+average_payment_wj = merged_wj['avg_payment_per_visitor'].mean()
+
+merged_entire = entire_payments.merge(entire_visits, on='ds', suffixes=('_payments', '_visits'))
+merged_entire['avg_payment_per_visitor'] = merged_entire['y_payments'] / merged_entire['y_visits']
+average_payment_entire = merged_entire['avg_payment_per_visitor'].mean()
 
 # Define the Dash app layout
 app.layout = dbc.Container([
@@ -501,14 +434,14 @@ app.layout = dbc.Container([
                             width=6,
                         ),
                     ], className="mb-3"),
-                    # New Row: Visitor CAGR Growth Rate Assumption Input
+                    # Visitor CAGR Growth Rate Assumption Input
                     dbc.Row([
                         dbc.Col(html.Label("Visitor CAGR Growth Rate (%):"), width=6),
                         dbc.Col(
                             dcc.Input(
                                 id='visitor-cagr',  # New input ID
                                 type='number',
-                                value=initial_visitor_cagr,  # **Set to historical CAGR**
+                                value=initial_visitor_cagr,  # Set to historical CAGR
                                 min=-100,  # Minimum reasonable CAGR
                                 max=100,    # Maximum reasonable CAGR
                                 step=0.1,   # Step size for finer control
@@ -558,24 +491,24 @@ app.layout = dbc.Container([
         # Payments Forecast - West Jordan Clinic
         dbc.Col([
             html.H3("Payments Forecast (West Jordan Clinic)", className="mb-3"),
-            dcc.Graph(id='payments-forecast-wj'),
+            dcc.Graph(figure=payments_fig_wj, id='payments-forecast-wj'),
             dbc.Card([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(id='payments-rmse-wj', width=3),
+                        dbc.Col(f"{payments_metrics_wj['RMSE']:.2f}", width=3),
                         dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(id='payments-mape-wj', width=3),
+                        dbc.Col(f"{payments_metrics_wj['MAPE']:.2f}%", width=3),
                     ], className="mb-2"),
                     dbc.Row([
                         dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(id='payments-cagr-wj', width=3),
+                        dbc.Col(f"{payments_cagr_wj:.2f}%" if payments_cagr_wj else "N/A", width=3),
                     ], className="mb-2"),
                     # Average Payment per Visitor Metric
                     dbc.Row([
                         dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=3),
-                        dbc.Col(id='payments-avg-payment-wj', width=3),
+                        dbc.Col(f"${average_payment_wj:.2f}", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -584,19 +517,19 @@ app.layout = dbc.Container([
         # Visits Forecast - West Jordan Clinic
         dbc.Col([
             html.H3("Visits Forecast (West Jordan Clinic)", className="mb-3"),
-            dcc.Graph(id='visits-forecast-wj'),
+            dcc.Graph(figure=visits_fig_wj, id='visits-forecast-wj'),
             dbc.Card([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(id='visits-rmse-wj', width=3),
+                        dbc.Col(f"{visits_metrics_wj['RMSE']:.2f}", width=3),
                         dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(id='visits-mape-wj', width=3),
+                        dbc.Col(f"{visits_metrics_wj['MAPE']:.2f}%", width=3),
                     ], className="mb-2"),
                     dbc.Row([
                         dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(id='visits-cagr-wj', width=3),
+                        dbc.Col(f"{initial_visitor_cagr:.2f}%", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -607,24 +540,24 @@ app.layout = dbc.Container([
         # Payments Forecast - Entire Payments Data Set
         dbc.Col([
             html.H3("Payments Forecast (Entire Data Set)", className="mb-3"),
-            dcc.Graph(id='payments-forecast-entire'),
+            dcc.Graph(figure=payments_fig_entire, id='payments-forecast-entire'),
             dbc.Card([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(id='payments-rmse-entire', width=3),
+                        dbc.Col(f"{payments_metrics_entire['RMSE']:.2f}", width=3),
                         dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(id='payments-mape-entire', width=3),
+                        dbc.Col(f"{payments_metrics_entire['MAPE']:.2f}%", width=3),
                     ], className="mb-2"),
                     dbc.Row([
                         dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(id='payments-cagr-entire', width=3),
+                        dbc.Col(f"{payments_cagr_entire:.2f}%" if payments_cagr_entire else "N/A", width=3),
                     ], className="mb-2"),
                     # Average Payment per Visitor Metric
                     dbc.Row([
                         dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=3),
-                        dbc.Col(id='payments-avg-payment-entire', width=3),
+                        dbc.Col(f"${average_payment_entire:.2f}", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -633,19 +566,19 @@ app.layout = dbc.Container([
         # Visits Forecast - Entire Payments Data Set
         dbc.Col([
             html.H3("Visits Forecast (Entire Data Set)", className="mb-3"),
-            dcc.Graph(id='visits-forecast-entire'),
+            dcc.Graph(figure=visits_fig_entire, id='visits-forecast-entire'),
             dbc.Card([
                 dbc.CardHeader(html.H5("Metrics")),
                 dbc.CardBody([
                     dbc.Row([
                         dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(id='visits-rmse-entire', width=3),
+                        dbc.Col(f"{visits_metrics_entire['RMSE']:.2f}", width=3),
                         dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(id='visits-mape-entire', width=3),
+                        dbc.Col(f"{visits_metrics_entire['MAPE']:.2f}%", width=3),
                     ], className="mb-2"),
                     dbc.Row([
                         dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(id='visits-cagr-entire', width=3),
+                        dbc.Col(f"{visits_cagr_entire:.2f}%" if visits_cagr_entire else "N/A", width=3),
                     ], className="mb-2"),
                 ])
             ], className="mb-4"),
@@ -699,59 +632,30 @@ app.layout = dbc.Container([
 
 ], fluid=True)
 
-# Define callbacks to update graphs and metrics
+# Callback for Break-Even Analysis
 @app.callback(
     [
-        Output('payments-forecast-wj', 'figure'),
-        Output('visits-forecast-wj', 'figure'),
-        Output('payments-rmse-wj', 'children'),
-        Output('payments-mape-wj', 'children'),
-        Output('payments-cagr-wj', 'children'),
-        Output('payments-avg-payment-wj', 'children'),  # New Output
-        Output('visits-rmse-wj', 'children'),
-        Output('visits-mape-wj', 'children'),
-        Output('visits-cagr-wj', 'children'),
         Output('break-even-graph', 'figure'),
         Output('bea-bep-visits', 'children'),
         Output('bea-bep-dollars', 'children'),
         Output('bea-time-to-bep', 'children'),
-        Output('payments-forecast-entire', 'figure'),
-        Output('visits-forecast-entire', 'figure'),
-        Output('payments-rmse-entire', 'children'),
-        Output('payments-mape-entire', 'children'),
-        Output('payments-cagr-entire', 'children'),
-        Output('payments-avg-payment-entire', 'children'),  # New Output
-        Output('visits-rmse-entire', 'children'),
-        Output('visits-mape-entire', 'children'),
-        Output('visits-cagr-entire', 'children'),
         Output('error-message', 'children'),  # Error message
         Output('error-message', 'is_open'),  # Alert visibility
     ],
     [
-        Input('refresh-button', 'n_clicks'),  # Input for Refresh Button
+        Input('refresh-button', 'n_clicks'),
     ],
     [
         State('cost-per-visit', 'value'),
-        State('avg-payment-per-visitor', 'value'),  # New State
+        State('avg-payment-per-visitor', 'value'),
         State('initial-visitors', 'value'),
         State('startup-costs', 'value'),
-        State('visitor-cagr', 'value'),  # New State for Visitor CAGR
+        State('visitor-cagr', 'value'),
     ]
 )
-def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor, initial_visitors, startup_costs, visitor_cagr):
+def update_bea(n_clicks, cost_per_visit, avg_payment_per_visitor, initial_visitors, startup_costs, visitor_cagr):
     """
-    Callback function to update all graphs and metrics based on user inputs when the refresh button is clicked.
-
-    Parameters:
-    - n_clicks (int): Number of times the refresh button has been clicked.
-    - cost_per_visit (float): Average cost per visitor input by the user.
-    - avg_payment_per_visitor (float): Average payment per visitor input by the user.
-    - initial_visitors (int): Initial visitors assumption input by the user.
-    - startup_costs (float): Start-Up costs input by the user.
-    - visitor_cagr (float): Visitor CAGR Growth Rate input by the user.
-
-    Returns:
-    - Tuple containing updated figures and metrics for all outputs.
+    Callback to update the Break-Even Analysis (BEA) section based on user inputs.
     """
     try:
         # Validate and sanitize inputs
@@ -759,7 +663,7 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
         avg_payment_per_visitor = float(avg_payment_per_visitor) if avg_payment_per_visitor is not None else 0
         initial_visitors = int(initial_visitors) if initial_visitors is not None else 0
         startup_costs = float(startup_costs) if startup_costs is not None else 0
-        visitor_cagr = float(visitor_cagr) if visitor_cagr is not None else 0  # Validate Visitor CAGR
+        visitor_cagr = float(visitor_cagr) if visitor_cagr is not None else 0
 
         # Input Validation
         if cost_per_visit < 0:
@@ -782,46 +686,6 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
         if visitor_cagr < -100 or visitor_cagr > 100:
             raise ValueError("Visitor CAGR Growth Rate must be between -100% and 100%.")
 
-        # Update Payments Forecast Graph for West Jordan Clinic
-        payments_fig_wj = create_prophet_forecast_graph(
-            actual_df=west_jordan_payments,
-            forecast_df=payments_forecast_wj,
-            title="Payments Forecast for West Jordan Clinic",
-            y_title="Payments ($)",
-            actual_name="Actual Payments",
-            forecast_name="Forecasted Payments",
-            rmse=payments_metrics_wj['RMSE'],
-            mape=payments_metrics_wj['MAPE'],
-            cagr=None  # CAGR will be updated below
-        )
-
-        # Calculate Average Payment per Visitor for West Jordan Clinic
-        merged_wj = west_jordan_payments.merge(west_jordan_visits, on='ds', suffixes=('_payments', '_visits'))
-        merged_wj['avg_payment_per_visitor'] = merged_wj['y_payments'] / merged_wj['y_visits']
-        average_payment_wj = merged_wj['avg_payment_per_visitor'].mean()
-        logger.info(f"Calculated Average Payment per Visitor for West Jordan Clinic: ${average_payment_wj:.2f}")
-
-        # Update Visits Forecast Graph for West Jordan Clinic
-        visits_fig_wj = create_prophet_forecast_graph(
-            actual_df=west_jordan_visits,
-            forecast_df=visits_forecast_wj,
-            title="Visits Forecast for West Jordan Clinic",
-            y_title="Visits",
-            actual_name="Actual Visits",
-            forecast_name="Forecasted Visits",
-            rmse=visits_metrics_wj['RMSE'],
-            mape=visits_metrics_wj['MAPE'],
-            cagr=None  # CAGR will be updated below
-        )
-
-        # Calculate Average Payment per Visitor for Entire Data Set
-        merged_entire = entire_payments.merge(entire_visits, on='ds', suffixes=('_payments', '_visits'))
-        merged_entire['avg_payment_per_visitor'] = merged_entire['y_payments'] / merged_entire['y_visits']
-        average_payment_entire = merged_entire['avg_payment_per_visitor'].mean()
-        logger.info(f"Calculated Average Payment per Visitor for Entire Data Set: ${average_payment_entire:.2f}")
-
-        # ---- BEA Analysis ----
-
         # Identify the last date of actual payments data
         last_actual_date = west_jordan_payments['ds'].max()
         logger.info(f"Last actual payment date: {last_actual_date}")
@@ -836,16 +700,15 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
         if future_visits_forecast_wj.empty:
             raise ValueError("No forecasted data available for BEA.")
 
-        # Use User-Provided Visitor CAGR for BEA Analysis
         # Convert CAGR to a monthly growth rate for visits
         monthly_growth_rate_visits = (1 + visitor_cagr / 100) ** (1/12) - 1
-        logger.info(f"Converted Visitor CAGR to monthly growth rate for visits: {monthly_growth_rate_visits:.4f}")
+        logger.info(f"Monthly growth rate for visits: {monthly_growth_rate_visits:.4f}")
 
         # Initialize projected visitors list with initial_visitors
         projected_visits_wj = [initial_visitors]
 
         # Apply monthly growth rate to project future visitors
-        for month in range(len(future_visits_forecast_wj)):
+        for _ in range(len(future_visits_forecast_wj)):
             next_visits = projected_visits_wj[-1] * (1 + monthly_growth_rate_visits)
             projected_visits_wj.append(next_visits)
 
@@ -860,31 +723,25 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
         # Calculate Revenue and Variable Costs based on projected visitors
         revenue_wj_future = avg_payment_per_visitor * projected_visits_wj
         variable_costs_wj_future = cost_per_visit * projected_visits_wj
-        net_profit_wj_future = revenue_wj_future - variable_costs_wj_future
 
-        # **Incorporate Start-Up Costs Assumption by Adding to Variable Costs in the First Month**
+        # Incorporate Start-Up Costs by adding to Variable Costs in the first month
         if startup_costs > 0 and not variable_costs_wj_future.empty:
-            variable_costs_wj_future.iloc[0] += startup_costs  # Add Start-Up Costs to Variable Costs in the first forecasted month
-            logger.info(f"Incorporated start-up costs assumption: ${startup_costs:,.2f} added to Variable Costs in the first forecasted month.")
+            variable_costs_wj_future.iloc[0] += startup_costs
+            logger.info(f"Incorporated start-up costs: ${startup_costs:,.2f} into Variable Costs for the first month.")
 
-        # Recalculate Net Profit after adding Start-Up Costs to Variable Costs
+        # Recalculate Net Profit
         net_profit_wj_future = revenue_wj_future - variable_costs_wj_future
 
         # Determine Break-Even Point (First month where Net Profit >= 0)
         bep_indices_wj = net_profit_wj_future[net_profit_wj_future >= 0].index
         if not bep_indices_wj.empty:
             bep_date_wj = bep_indices_wj[0]
-            try:
-                # Get the positional index of the BEP date
-                bep_pos_wj = net_profit_wj_future.index.get_loc(bep_date_wj)
-                bep_month_wj = bep_pos_wj + 1  # +1 because index starts at 0
-                bep_visits_wj = projected_visits_wj.iloc[bep_pos_wj]
-                bep_dollars_wj = revenue_wj_future.iloc[bep_pos_wj]
-                time_to_bep_wj = bep_month_wj  # in months
-                logger.info(f"BEP achieved in month {bep_month_wj}: {time_to_bep_wj} months")
-            except Exception as e:
-                logger.error(f"Error determining BEP position: {e}")
-                raise
+            bep_pos_wj = net_profit_wj_future.index.get_loc(bep_date_wj)
+            bep_month_wj = bep_pos_wj + 1  # +1 because index starts at 0
+            bep_visits_wj = projected_visits_wj.iloc[bep_pos_wj]
+            bep_dollars_wj = revenue_wj_future.iloc[bep_pos_wj]
+            time_to_bep_wj = bep_month_wj  # in months
+            logger.info(f"BEP achieved in month {bep_month_wj}: {time_to_bep_wj} months")
         else:
             bep_date_wj = None
             bep_pos_wj = None
@@ -892,9 +749,9 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
             bep_visits_wj = None
             bep_dollars_wj = None
             time_to_bep_wj = None
-            logger.info("BEP not achieved within forecast period")
+            logger.info("BEP not achieved within forecast period.")
 
-        # Create Break-Even Analysis Graph with Revenue, Costs, Net Profit, and Visits
+        # Create Break-Even Analysis Graph
         bea_fig = go.Figure()
 
         # Add Total Revenue
@@ -959,7 +816,7 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
             ),
             template='plotly_white',
             height=600,
-            margin=dict(l=60, r=100, t=100, b=60),  # Adjust right margin for yaxis2
+            margin=dict(l=60, r=100, t=100, b=60),
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
@@ -970,158 +827,42 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
             xaxis=dict(range=[future_payments_forecast_wj['ds'].min().date(), future_payments_forecast_wj['ds'].max().date()])
         )
 
-        # Update Payments Forecast Graph for Entire Payments Data Set
-        payments_fig_entire = create_prophet_forecast_graph(
-            actual_df=entire_payments,
-            forecast_df=payments_forecast_entire,
-            title="Payments Forecast for Entire Data Set",
-            y_title="Payments ($)",
-            actual_name="Actual Payments",
-            forecast_name="Forecasted Payments",
-            rmse=payments_metrics_entire['RMSE'],
-            mape=payments_metrics_entire['MAPE'],
-            cagr=None  # CAGR will be updated below
-        )
+        # Prepare BEA Metrics
+        bep_visits_display = f"{bep_visits_wj:.0f}" if isinstance(bep_visits_wj, float) else "N/A"
+        bep_dollars_display = f"${bep_dollars_wj:,.2f}" if isinstance(bep_dollars_wj, float) else "N/A"
+        time_to_bep_display = f"{time_to_bep_wj} months" if isinstance(time_to_bep_wj, int) else "N/A"
 
-        # Update Visits Forecast Graph for Entire Payments Data Set
-        visits_fig_entire = create_prophet_forecast_graph(
-            actual_df=entire_visits,
-            forecast_df=visits_forecast_entire,
-            title="Visits Forecast for Entire Data Set",
-            y_title="Visits",
-            actual_name="Actual Visits",
-            forecast_name="Forecasted Visits",
-            rmse=visits_metrics_entire['RMSE'],
-            mape=visits_metrics_entire['MAPE'],
-            cagr=None  # CAGR will be updated below
-        )
-
-        # **Calculate CAGR for West Jordan Clinic (Historical)**
-        if payments_cagr_wj is None:
-            payments_cagr_wj_text = "N/A"
-        else:
-            payments_cagr_wj_text = f"{payments_cagr_wj:.2f}%"
-
-        if visits_cagr_wj is None:
-            visits_cagr_wj_text = "N/A"
-        else:
-            visits_cagr_wj_text = f"{visits_cagr_wj:.2f}%"
-
-        # Calculate CAGR for Entire Payments Data Set
-        if payments_cagr_entire is None:
-            payments_cagr_entire_text = "N/A"
-        else:
-            payments_cagr_entire_text = f"{payments_cagr_entire:.2f}%"
-
-        if visits_cagr_entire is None:
-            visits_cagr_entire_text = "N/A"
-        else:
-            visits_cagr_entire_text = f"{visits_cagr_entire:.2f}%"
-
-        # **Update graphs with CAGR**
-        payments_fig_wj = create_prophet_forecast_graph(
-            actual_df=west_jordan_payments,
-            forecast_df=payments_forecast_wj,
-            title="Payments Forecast for West Jordan Clinic",
-            y_title="Payments ($)",
-            actual_name="Actual Payments",
-            forecast_name="Forecasted Payments",
-            rmse=payments_metrics_wj['RMSE'],
-            mape=payments_metrics_wj['MAPE'],
-            cagr=payments_cagr_wj if payments_cagr_wj is not None else 0  # Handle None
-        )
-
-        visits_fig_wj = create_prophet_forecast_graph(
-            actual_df=west_jordan_visits,
-            forecast_df=visits_forecast_wj,
-            title="Visits Forecast for West Jordan Clinic",
-            y_title="Visits",
-            actual_name="Actual Visits",
-            forecast_name="Forecasted Visits",
-            rmse=visits_metrics_wj['RMSE'],
-            mape=visits_metrics_wj['MAPE'],
-            cagr=visitor_cagr  # Use User-Defined CAGR
-        )
-
-        payments_fig_entire = create_prophet_forecast_graph(
-            actual_df=entire_payments,
-            forecast_df=payments_forecast_entire,
-            title="Payments Forecast for Entire Data Set",
-            y_title="Payments ($)",
-            actual_name="Actual Payments",
-            forecast_name="Forecasted Payments",
-            rmse=payments_metrics_entire['RMSE'],
-            mape=payments_metrics_entire['MAPE'],
-            cagr=payments_cagr_entire if payments_cagr_entire is not None else 0  # Handle None
-        )
-
-        visits_fig_entire = create_prophet_forecast_graph(
-            actual_df=entire_visits,
-            forecast_df=visits_forecast_entire,
-            title="Visits Forecast for Entire Data Set",
-            y_title="Visits",
-            actual_name="Actual Visits",
-            forecast_name="Forecasted Visits",
-            rmse=visits_metrics_entire['RMSE'],
-            mape=visits_metrics_entire['MAPE'],
-            cagr=visits_cagr_entire if visits_cagr_entire is not None else 0  # Handle None
-        )
-
-        # Return all updated figures and metrics with no error
         return (
-            payments_fig_wj,  # payments-forecast-wj.figure
-            visits_fig_wj,    # visits-forecast-wj.figure
-            f"{payments_metrics_wj['RMSE']:.2f}",  # payments-rmse-wj.children
-            f"{payments_metrics_wj['MAPE']:.2f}%",  # payments-mape-wj.children
-            f"{visitor_cagr:.2f}%",          # payments-cagr-wj.children (Updated to User CAGR)
-            f"${average_payment_wj:.2f}",        # payments-avg-payment-wj.children (New)
-            f"{visits_metrics_wj['RMSE']:.2f}",    # visits-rmse-wj.children
-            f"{visits_metrics_wj['MAPE']:.2f}%",   # visits-mape-wj.children
-            f"{visitor_cagr:.2f}%",             # visits-cagr-wj.children (Updated to User CAGR)
-            bea_fig,                              # break-even-graph.figure
-            f"{bep_visits_wj:.0f}" if isinstance(bep_visits_wj, float) else bep_visits_wj,  # bea-bep-visits.children
-            f"${bep_dollars_wj:,.2f}" if isinstance(bep_dollars_wj, float) else bep_dollars_wj,  # bea-bep-dollars.children
-            f"{time_to_bep_wj} months" if isinstance(time_to_bep_wj, int) else "N/A",  # bea-time-to-bep.children
-            payments_fig_entire,  # payments-forecast-entire.figure
-            visits_fig_entire,     # visits-forecast-entire.figure
-            f"{payments_metrics_entire['RMSE']:.2f}",  # payments-rmse-entire.children
-            f"{payments_metrics_entire['MAPE']:.2f}%",  # payments-mape-entire.children
-            payments_cagr_entire_text,          # payments-cagr-entire.children
-            f"${average_payment_entire:.2f}",        # payments-avg-payment-entire.children (New)
-            f"{visits_metrics_entire['RMSE']:.2f}",    # visits-rmse-entire.children
-            f"{visits_metrics_entire['MAPE']:.2f}%",   # visits-mape-entire.children
-            visits_cagr_entire_text,             # visits-cagr-entire.children
-            "",  # error-message.children (No error message)
-            False,  # error-message.is_open (Alert is closed)
+            bea_fig,
+            bep_visits_display,
+            bep_dollars_display,
+            time_to_bep_display,
+            "",  # No error message
+            False  # Alert is closed
         )
+
     except KeyError as e:
-        logger.error(f"KeyError in callback: {e}")
-        # Return empty figures and default values in case of error
-        empty_fig = go.Figure()
+        logger.error(f"KeyError in BEA callback: {e}")
         return (
-            empty_fig,  # payments-forecast-wj.figure
-            empty_fig,  # visits-forecast-wj.figure
-            "", "", "", "", "", "", "",
-            empty_fig, "", "", "",
-            empty_fig, empty_fig, "", "", "", "",
-            "", "", "", "",
-            f"An error occurred: {e}", True
+            go.Figure(),
+            "N/A",
+            "N/A",
+            "N/A",
+            f"An error occurred: {e}",
+            True
         )
     except Exception as e:
-        logger.error(f"Error in callback: {e}")
-        # Return empty figures and default values in case of error
-        empty_fig = go.Figure()
+        logger.error(f"Error in BEA callback: {e}")
         return (
-            empty_fig,  # payments-forecast-wj.figure
-            empty_fig,  # visits-forecast-wj.figure
-            "", "", "", "", "", "", "",
-            empty_fig, "", "", "",
-            empty_fig, empty_fig, "", "", "", "",
-            "", "", "", "",
-            f"An error occurred: {e}", True
+            go.Figure(),
+            "N/A",
+            "N/A",
+            "N/A",
+            f"An error occurred: {e}",
+            True
         )
 
-# Define callbacks for Download Buttons
+# Callbacks for Download Buttons
 @app.callback(
     Output("download-payments-wj-data", "data"),
     Input("download-payments-wj-button", "n_clicks"),
@@ -1129,13 +870,7 @@ def update_graphs_and_metrics(n_clicks, cost_per_visit, avg_payment_per_visitor,
 )
 def download_payments_wj(n_clicks):
     """
-    Callback to download the Payments Forecast data for West Jordan Clinic as a CSV file.
-
-    Parameters:
-    - n_clicks (int): Number of times the download button has been clicked.
-
-    Returns:
-    - CSV file containing the Payments Forecast data for West Jordan Clinic.
+    Download Payments Forecast data for West Jordan Clinic.
     """
     return dcc.send_data_frame(payments_forecast_wj.to_csv, "payments_forecast_wj.csv")
 
@@ -1146,13 +881,7 @@ def download_payments_wj(n_clicks):
 )
 def download_visits_wj(n_clicks):
     """
-    Callback to download the Visits Forecast data for West Jordan Clinic as a CSV file.
-
-    Parameters:
-    - n_clicks (int): Number of times the download button has been clicked.
-
-    Returns:
-    - CSV file containing the Visits Forecast data for West Jordan Clinic.
+    Download Visits Forecast data for West Jordan Clinic.
     """
     return dcc.send_data_frame(visits_forecast_wj.to_csv, "visits_forecast_wj.csv")
 
@@ -1163,13 +892,7 @@ def download_visits_wj(n_clicks):
 )
 def download_payments_entire(n_clicks):
     """
-    Callback to download the Payments Forecast data for the Entire Data Set as a CSV file.
-
-    Parameters:
-    - n_clicks (int): Number of times the download button has been clicked.
-
-    Returns:
-    - CSV file containing the Payments Forecast data for the Entire Data Set.
+    Download Payments Forecast data for Entire Data Set.
     """
     return dcc.send_data_frame(payments_forecast_entire.to_csv, "payments_forecast_entire.csv")
 
@@ -1180,17 +903,11 @@ def download_payments_entire(n_clicks):
 )
 def download_visits_entire(n_clicks):
     """
-    Callback to download the Visits Forecast data for the Entire Data Set as a CSV file.
-
-    Parameters:
-    - n_clicks (int): Number of times the download button has been clicked.
-
-    Returns:
-    - CSV file containing the Visits Forecast data for the Entire Data Set.
+    Download Visits Forecast data for Entire Data Set.
     """
     return dcc.send_data_frame(visits_forecast_entire.to_csv, "visits_forecast_entire.csv")
 
-# Define callbacks for Help Modal
+# Callback for Help Modal
 @app.callback(
     Output("help-modal", "is_open"),
     [Input("open-help", "n_clicks"), Input("close-help", "n_clicks")],
@@ -1198,15 +915,7 @@ def download_visits_entire(n_clicks):
 )
 def toggle_modal(n1, n2, is_open):
     """
-    Callback to toggle the visibility of the Help Modal.
-
-    Parameters:
-    - n1 (int): Number of clicks on the "Help" button.
-    - n2 (int): Number of clicks on the "Close" button within the modal.
-    - is_open (bool): Current state of the modal's visibility.
-
-    Returns:
-    - bool: Updated state of the modal's visibility.
+    Toggle the visibility of the Help Modal.
     """
     if n1 or n2:
         return not is_open
