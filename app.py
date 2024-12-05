@@ -921,6 +921,9 @@ def toggle_modal(n1, n2, is_open):
         return not is_open
     return is_open
 
-# Run the app
+import os
+
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    port = int(os.environ.get('PORT', 8050))  # Default to 8050 if PORT is not set
+    app.run_server(debug=False, host='0.0.0.0', port=port)
+
