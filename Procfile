@@ -1,1 +1,2 @@
-web: python Python5.py
+web: gunicorn app:server
+
