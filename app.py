@@ -601,6 +601,7 @@ app.layout = dbc.Container([
 # Callback functions remain unchanged
 
 # Run the server
-if __name__ == "__main__":
-    import os
-    app.run_server(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 8050)))
+# Remove or comment out the app.run_server() block when using Gunicorn
+# if __name__ == "__main__":
+#     import os
+#     app.run_server(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 8050)))
