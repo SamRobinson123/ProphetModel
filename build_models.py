@@ -5,10 +5,14 @@ import pandas as pd
 from prophet import Prophet
 import numpy as np
 import logging
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Get the base directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Function to preprocess payments data
 def preprocess_payments(df):
@@ -51,7 +55,8 @@ def validate_dataframe(df, df_name):
 
 # Read the data
 try:
-    payments_df = pd.read_excel("payment.xlsx")
+    data_path = os.path.join(BASE_DIR, 'payment.xlsx')
+    payments_df = pd.read_excel(data_path)
     payments_df = payments_df[payments_df['EncStatus'] == 'CHK']
     logger.info("Successfully read 'payment.xlsx' and filtered by EncStatus 'CHK'.")
 except FileNotFoundError:
@@ -108,21 +113,21 @@ payments_metrics_entire = calculate_metrics(entire_payments, payments_forecast_e
 visits_metrics_entire = calculate_metrics(entire_visits, visits_forecast_entire)
 
 # Save forecasts
-payments_forecast_wj.to_csv('payments_forecast_wj.csv', index=False)
-visits_forecast_wj.to_csv('visits_forecast_wj.csv', index=False)
-payments_forecast_entire.to_csv('payments_forecast_entire.csv', index=False)
-visits_forecast_entire.to_csv('visits_forecast_entire.csv', index=False)
+payments_forecast_wj.to_csv(os.path.join(BASE_DIR, 'payments_forecast_wj.csv'), index=False)
+visits_forecast_wj.to_csv(os.path.join(BASE_DIR, 'visits_forecast_wj.csv'), index=False)
+payments_forecast_entire.to_csv(os.path.join(BASE_DIR, 'payments_forecast_entire.csv'), index=False)
+visits_forecast_entire.to_csv(os.path.join(BASE_DIR, 'visits_forecast_entire.csv'), index=False)
 
 # Save metrics
-pd.DataFrame([payments_metrics_wj]).to_csv('payments_metrics_wj.csv', index=False)
-pd.DataFrame([visits_metrics_wj]).to_csv('visits_metrics_wj.csv', index=False)
-pd.DataFrame([payments_metrics_entire]).to_csv('payments_metrics_entire.csv', index=False)
-pd.DataFrame([visits_metrics_entire]).to_csv('visits_metrics_entire.csv', index=False)
+pd.DataFrame([payments_metrics_wj]).to_csv(os.path.join(BASE_DIR, 'payments_metrics_wj.csv'), index=False)
+pd.DataFrame([visits_metrics_wj]).to_csv(os.path.join(BASE_DIR, 'visits_metrics_wj.csv'), index=False)
+pd.DataFrame([payments_metrics_entire]).to_csv(os.path.join(BASE_DIR, 'payments_metrics_entire.csv'), index=False)
+pd.DataFrame([visits_metrics_entire]).to_csv(os.path.join(BASE_DIR, 'visits_metrics_entire.csv'), index=False)
 
 # Save actual data for plotting
-west_jordan_payments.to_csv('west_jordan_payments.csv', index=False)
-west_jordan_visits.to_csv('west_jordan_visits.csv', index=False)
-entire_payments.to_csv('entire_payments.csv', index=False)
-entire_visits.to_csv('entire_visits.csv', index=False)
+west_jordan_payments.to_csv(os.path.join(BASE_DIR, 'west_jordan_payments.csv'), index=False)
+west_jordan_visits.to_csv(os.path.join(BASE_DIR, 'west_jordan_visits.csv'), index=False)
+entire_payments.to_csv(os.path.join(BASE_DIR, 'entire_payments.csv'), index=False)
+entire_visits.to_csv(os.path.join(BASE_DIR, 'entire_visits.csv'), index=False)
 
 logger.info("Forecasts, metrics, and actual data have been saved to CSV files.")
