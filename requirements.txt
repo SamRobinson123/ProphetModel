@@ -7,14 +7,3 @@ prophet
 scikit-learn
 plotly
 gunicorn
-<<<<<<< HEAD
-dash
-dash_bootstrap_components
-pandas
-plotly
-prophet
-scikit-learn
-openpyxl
-
-=======
->>>>>>> bb8d9df93d8e27fe69becaced9caa645186f5035
