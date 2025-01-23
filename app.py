@@ -1,670 +1,534 @@
-# app.py
+# inflation_break_even.py
 
-# Import necessary libraries
+import math
+import logging
+import os
+from datetime import datetime
+
+import dash
+import dash_bootstrap_components as dbc
+from dash import html, dcc, Input, Output, State
+import plotly.graph_objects as go
 import pandas as pd
 from prophet import Prophet
-from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
-import plotly.graph_objects as go
-from dash import Dash, html, dcc, Input, Output, State
-import dash_bootstrap_components as dbc
-import logging
-import openpyxl
-from datetime import datetime
-import numpy as np
-import os
+from sklearn.metrics import (
+    mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+)
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Function to create a Plotly graph for Prophet forecast with actual and forecasted data
-def create_prophet_forecast_graph(actual_df, forecast_df, title, y_title, actual_name, forecast_name, rmse=None,
-                                  mape=None, cagr=None):
-    fig = go.Figure()
+class ClinicDataPreprocessor:
+    """
+    Loads and forecasts 'payment.xlsx' for a given facility, 5-year forecast.
+    """
+    def __init__(self, file_path="payment.xlsx", facility_name="UPFH Family Clinic - West Jordan", periods=60):
+        self.file_path = file_path
+        self.facility_name = facility_name
+        self.periods = periods
 
-    # Add actual data
+        self.df_raw = None
+        self.visits_df_wj = None
+        self.payments_df_wj = None
+        self.visits_forecast_wj = None
+        self.payments_forecast_wj = None
+
+    def load_data(self):
+        if not os.path.exists(self.file_path):
+            raise FileNotFoundError(f"File not found: {self.file_path}")
+        df = pd.read_excel(self.file_path)
+        logger.info(f"Read {len(df)} rows from '{self.file_path}'.")
+
+        if "EncStatus" not in df.columns:
+            raise ValueError("Missing 'EncStatus' column.")
+
+        df = df[df["EncStatus"] == "CHK"]
+        logger.info(f"Records after filtering EncStatus=='CHK': {len(df)}")
+        self.df_raw = df
+
+    def preprocess_visits(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "EncDate" not in df.columns:
+            raise ValueError("Missing 'EncDate' for visits.")
+        df = df.rename(columns={"EncDate":"ds"})
+        df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
+        df = df.dropna(subset=["ds"])
+        df = df.groupby(pd.Grouper(key="ds", freq="ME")).size().reset_index(name="y")
+        df = df[df["y"] >= 0]
+        return df
+
+    def preprocess_payments(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "EncDate" not in df.columns or "NetPayment" not in df.columns:
+            raise ValueError("Missing 'EncDate' or 'NetPayment'.")
+        df = df.rename(columns={"EncDate":"ds","NetPayment":"y"})
+        df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
+        df = df.dropna(subset=["ds","y"])
+        df = df[df["y"] > 0]
+        df = df.groupby(pd.Grouper(key="ds", freq="ME"))["y"].sum().reset_index()
+        return df
+
+    def train_prophet(self, df: pd.DataFrame) -> pd.DataFrame:
+        model = Prophet()
+        model.fit(df)
+        future = model.make_future_dataframe(periods=self.periods, freq="M")
+        forecast = model.predict(future)
+        return forecast
+
+    def process_data(self):
+        """Load, filter facility, preprocess visits/payments, 5-year forecast."""
+        self.load_data()
+
+        if "Facility" not in self.df_raw.columns:
+            raise ValueError("Missing 'Facility' column in data.")
+        facility_df = self.df_raw[self.df_raw["Facility"] == self.facility_name]
+        if facility_df.empty:
+            raise ValueError(f"No data for facility '{self.facility_name}'.")
+
+        self.visits_df_wj = self.preprocess_visits(facility_df)
+        self.payments_df_wj = self.preprocess_payments(facility_df)
+
+        self.visits_forecast_wj = self.train_prophet(self.visits_df_wj)
+        self.payments_forecast_wj = self.train_prophet(self.payments_df_wj)
+
+def calculate_forecast_metrics(actual, predicted) -> dict:
+    mae = mean_absolute_error(actual, predicted)
+    mse = mean_squared_error(actual, predicted)
+    rmse = mse**0.5
+    mape = mean_absolute_percentage_error(actual, predicted)*100
+    return {
+        "MAE": mae,
+        "MSE": mse,
+        "RMSE": rmse,
+        "MAPE": mape
+    }
+
+def create_prophet_forecast_figure(actual_df, forecast_df, title, y_title,
+                                   actual_name="Actual", forecast_name="Forecast") -> go.Figure:
+    fig = go.Figure()
+    # Actual
     fig.add_trace(go.Scatter(
-        x=actual_df['ds'],
-        y=actual_df['y'],
-        mode='lines+markers',
+        x=actual_df["ds"],
+        y=actual_df["y"],
+        mode="lines+markers",
         name=actual_name,
-        line=dict(color='blue', width=2),
+        line=dict(color="blue", width=2),
         marker=dict(size=5)
     ))
-
-    # Add forecasted data
+    # Forecast
     fig.add_trace(go.Scatter(
-        x=forecast_df['ds'],
-        y=forecast_df['yhat'],
-        mode='lines',
+        x=forecast_df["ds"],
+        y=forecast_df["yhat"],
+        mode="lines",
         name=forecast_name,
-        line=dict(color='green', width=3)
+        line=dict(color="green", width=3)
     ))
-
-    # Add confidence intervals
-    fig.add_trace(go.Scatter(
-        x=forecast_df['ds'],
-        y=forecast_df['yhat_upper'],
-        mode='lines',
-        name='Upper Confidence Interval',
-        line=dict(color='lightgreen', dash='dash'),
-        showlegend=False
-    ))
-    fig.add_trace(go.Scatter(
-        x=forecast_df['ds'],
-        y=forecast_df['yhat_lower'],
-        mode='lines',
-        name='Lower Confidence Interval',
-        line=dict(color='lightgreen', dash='dash'),
-        fill='tonexty',
-        fillcolor='rgba(144, 238, 144, 0.2)',
-        showlegend=False
-    ))
-
-    # Prepare the title with metrics if provided
-    metrics_text = ""
-    if rmse is not None and mape is not None:
-        metrics_text += f"RMSE: {rmse:.2f}, MAPE: {mape:.2f}%"
-    if cagr is not None:
-        if metrics_text:
-            metrics_text += ", "
-        metrics_text += f"CAGR: {cagr:.2f}%"
-    title_with_metrics = f"{title}<br>{metrics_text}" if metrics_text else title
-
-    # Update the layout
+    # Confidence intervals
+    if "yhat_lower" in forecast_df.columns and "yhat_upper" in forecast_df.columns:
+        fig.add_trace(go.Scatter(
+            x=forecast_df["ds"],
+            y=forecast_df["yhat_upper"],
+            mode="lines",
+            line=dict(color="lightgreen", dash="dash"),
+            showlegend=False
+        ))
+        fig.add_trace(go.Scatter(
+            x=forecast_df["ds"],
+            y=forecast_df["yhat_lower"],
+            mode="lines",
+            line=dict(color="lightgreen", dash="dash"),
+            fill="tonexty",
+            fillcolor="rgba(144,238,144,0.2)",
+            showlegend=False
+        ))
     fig.update_layout(
-        title=title_with_metrics,
+        title=title,
         xaxis_title="Date",
         yaxis_title=y_title,
-        template='plotly_white',
+        template="plotly_white",
+        height=400
+    )
+    return fig
+
+def calculate_break_even_forecast(
+    df_forecast: pd.DataFrame,
+    cost_per_visit: float,
+    monthly_base_overhead: float,
+    physician_threshold: float,
+    monthly_physician_cost: float,
+    cost_inflation_rate: float,    # separate inflation for overhead & physician cost
+    payments_inflation_rate: float, # separate inflation for payments
+    startup_costs: float=0.0,
+    monthly_grant_income: float=0.0,
+    payments_factor: float=1.0
+) -> pd.DataFrame:
+    """
+    1. Apply monthly inflation to payments, then scale by 'payments_factor'.
+    2. monthly_revenue = inflated & scaled payments + grant
+    3. variable_cost = visits_yhat * cost_per_visit
+    4. overhead & physician cost also inflated by cost_inflation.
+    5. monthly_profit, cumulative_profit => break-even date.
+    """
+
+    df = df_forecast.copy()
+    df = df.sort_values("ds").reset_index(drop=True)
+
+    # Convert annual rates to monthly
+    cost_monthly_inflation = (1 + cost_inflation_rate)**(1/12) - 1
+    pay_monthly_inflation = (1 + payments_inflation_rate)**(1/12) - 1
+
+    # 1) Payment inflation
+    def inflated_payments(row):
+        idx = row.name
+        # each row is month i => scale by pay_monthly_inflation
+        # e.g. row['payments_yhat'] * (1 + pay_monthly_inflation)**idx
+        factor = (1 + pay_monthly_inflation)**idx
+        return row["payments_yhat"] * factor
+
+    df["payments_inflated"] = df.apply(inflated_payments, axis=1)
+    # then apply factor
+    df["payments_scaled"] = df["payments_inflated"] * payments_factor
+
+    # monthly revenue
+    df["monthly_revenue"] = df["payments_scaled"] + monthly_grant_income
+
+    # variable cost
+    df["variable_cost"] = df["visits_yhat"] * cost_per_visit
+
+    # overhead & physician cost inflated by cost_inflation
+    def compute_fixed(row):
+        idx = row.name
+        factor = (1 + cost_monthly_inflation)**idx
+        overhead_i = monthly_base_overhead * factor
+        # number of physicians
+        n_phys = math.ceil(row["visits_yhat"] / physician_threshold)
+        phys_i = n_phys * (monthly_physician_cost * factor)
+        return overhead_i + phys_i
+
+    df["fixed_cost"] = df.apply(compute_fixed, axis=1)
+
+    df["monthly_profit"] = df["monthly_revenue"] - (df["variable_cost"] + df["fixed_cost"])
+
+    # cumulative
+    cumul = []
+    running = -startup_costs
+    for p in df["monthly_profit"]:
+        running += p
+        cumul.append(running)
+    df["cumulative_profit"] = cumul
+
+    # break-even
+    mask = df["cumulative_profit"] >= 0
+    be_date = None
+    if mask.any():
+        idx = mask.idxmax()
+        be_date = df.loc[idx, "ds"]
+    df.attrs["break_even_date"] = be_date
+
+    return df
+
+
+# ---------- Load & Merge Forecasts ---------------
+preprocessor = None
+try:
+    preprocessor = ClinicDataPreprocessor(
+        file_path="payment.xlsx",
+        facility_name="UPFH Family Clinic - West Jordan",
+        periods=60  # 5 year
+    )
+    preprocessor.process_data()
+    logger.info("Data loaded & forecasted.")
+except Exception as e:
+    logger.error(f"Error: {e}")
+
+forecast_merged_wj = pd.DataFrame(columns=["ds","visits_yhat","payments_yhat"])
+visits_metrics = {}
+payments_metrics = {}
+visits_fig = go.Figure()
+payments_fig = go.Figure()
+
+if (
+    preprocessor and
+    preprocessor.visits_forecast_wj is not None and
+    preprocessor.payments_forecast_wj is not None and
+    not preprocessor.visits_forecast_wj.empty and
+    not preprocessor.payments_forecast_wj.empty
+):
+    v_fore = preprocessor.visits_forecast_wj.rename(columns={"yhat":"visits_yhat"})
+    p_fore = preprocessor.payments_forecast_wj.rename(columns={"yhat":"payments_yhat"})
+    v_fore = v_fore[["ds","visits_yhat"]].sort_values("ds")
+    p_fore = p_fore[["ds","payments_yhat"]].sort_values("ds")
+
+    forecast_merged_wj = v_fore.merge(p_fore, on="ds", how="inner").sort_values("ds")
+
+    # In-sample metrics
+    hist_len_v = len(preprocessor.visits_df_wj)
+    if hist_len_v <= len(v_fore):
+        actual_v = preprocessor.visits_df_wj["y"]
+        pred_v   = v_fore["visits_yhat"][:hist_len_v]
+        visits_metrics = calculate_forecast_metrics(actual_v, pred_v)
+
+    hist_len_p = len(preprocessor.payments_df_wj)
+    if hist_len_p <= len(p_fore):
+        actual_p = preprocessor.payments_df_wj["y"]
+        pred_p   = p_fore["payments_yhat"][:hist_len_p]
+        payments_metrics = calculate_forecast_metrics(actual_p, pred_p)
+
+    visits_fig = create_prophet_forecast_figure(
+        preprocessor.visits_df_wj,
+        preprocessor.visits_forecast_wj,
+        title="Visits Forecast (5 Years)",
+        y_title="Visits"
+    )
+    payments_fig = create_prophet_forecast_figure(
+        preprocessor.payments_df_wj,
+        preprocessor.payments_forecast_wj,
+        title="Payments Forecast (5 Years)",
+        y_title="Payments ($)"
+    )
+
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = app.server
+
+def metrics_card(title, m):
+    if not m:
+        return dbc.Card([dbc.CardBody("No metrics available.")])
+    return dbc.Card([
+        dbc.CardHeader(html.H5(title)),
+        dbc.CardBody([
+            html.Div(f"RMSE: {m.get('RMSE',0):.2f}"),
+            html.Div(f"MAPE: {m.get('MAPE',0):.2f}%"),
+            html.Div(f"MAE: {m.get('MAE',0):.2f}"),
+            html.Div(f"MSE: {m.get('MSE',0):.2f}")
+        ])
+    ], className="mb-3")
+
+app.layout = dbc.Container([
+    html.H1("Break-Even Analysis (Separate Cost & Payments Inflation)", className="mb-4"),
+
+    dbc.Row([
+        dbc.Col([
+            html.H3("Visits Forecast"),
+            dcc.Graph(figure=visits_fig),
+            metrics_card("Visits Metrics", visits_metrics)
+        ], width=6),
+        dbc.Col([
+            html.H3("Payments Forecast"),
+            dcc.Graph(figure=payments_fig),
+            metrics_card("Payments Metrics", payments_metrics)
+        ], width=6),
+    ]),
+
+    html.Hr(),
+    html.H2("Break-Even Analysis", className="mt-4 mb-3"),
+
+    # First row of user inputs
+    dbc.Row([
+        dbc.Col([
+            html.Label("Cost per Visit (Variable)"),
+            dcc.Input(id="cost-per-visit", type="number", value=100, step=10, style={"width":"100%"})
+        ], width=4),
+        dbc.Col([
+            html.Label("Monthly Base Overhead (Fixed)"),
+            dcc.Input(id="monthly-base-overhead", type="number", value=20000, step=1000, style={"width":"100%"})
+        ], width=4),
+        dbc.Col([
+            html.Label("Physician Threshold (Visits)"),
+            dcc.Input(id="physician-threshold", type="number", value=500, step=50, style={"width":"100%"})
+        ], width=4),
+    ], className="mb-3"),
+
+    # Second row of user inputs
+    dbc.Row([
+        dbc.Col([
+            html.Label("Monthly Physician Cost"),
+            dcc.Input(id="monthly-physician-cost", type="number", value=10000, step=1000, style={"width":"100%"})
+        ], width=4),
+        dbc.Col([
+            html.Label("Cost Inflation Rate (annual, e.g. 0.03)"),
+            dcc.Input(id="cost-inflation", type="number", value=0.03, step=0.01, style={"width":"100%"})
+        ], width=4),
+        dbc.Col([
+            html.Label("Payments Inflation Rate (annual, e.g. 0.02)"),
+            dcc.Input(id="payments-inflation", type="number", value=0.02, step=0.01, style={"width":"100%"})
+        ], width=4),
+    ], className="mb-3"),
+
+    # Third row
+    dbc.Row([
+        dbc.Col([
+            html.Label("Start-up Costs"),
+            dcc.Input(id="startup-costs", type="number", value=50000, step=5000, style={"width":"100%"})
+        ], width=4),
+        dbc.Col([
+            html.Label("Grant/Gov Monthly Income"),
+            dcc.Input(id="monthly-grant-income", type="number", value=50000, step=100, style={"width":"100%"})
+        ], width=4),
+        dbc.Col([
+            html.Label("Payments Factor (1.0 => no change)"),
+            dcc.Input(id="payments-factor", type="number", value=1.1, step="any", style={"width":"100%"})
+        ], width=4),
+    ], className="mb-3"),
+
+    dbc.Row([
+        dbc.Col([
+            dbc.Button("Update Model", id="update-button", color="primary", className="mt-4")
+        ], width=12),
+    ], className="mb-3"),
+
+    dbc.Row([
+        dbc.Col([
+            dcc.Graph(id="break-even-graph")
+        ], width=12),
+    ]),
+    dbc.Row([
+        dbc.Col([
+            html.H4("Break-Even Date:"),
+            html.Div(id="break-even-output", style={"fontWeight":"bold","marginTop":"10px"})
+        ], width=12),
+    ])
+], fluid=True)
+
+@app.callback(
+    [Output("break-even-graph", "figure"),
+     Output("break-even-output", "children")],
+    Input("update-button", "n_clicks"),
+    [
+        State("cost-per-visit","value"),
+        State("monthly-base-overhead","value"),
+        State("physician-threshold","value"),
+        State("monthly-physician-cost","value"),
+        State("cost-inflation","value"),
+        State("payments-inflation","value"),
+        State("startup-costs","value"),
+        State("monthly-grant-income","value"),
+        State("payments-factor","value")
+    ]
+)
+def update_break_even(
+    n_clicks,
+    cost_visit,
+    base_overhead,
+    threshold,
+    physician_cost,
+    cost_inflation,
+    pay_inflation,
+    startup,
+    grant_income,
+    pay_factor
+):
+    if n_clicks is None or forecast_merged_wj.empty:
+        fig = go.Figure()
+        return fig, "No forecast data or not updated yet."
+
+    # 1) Calculate break-even with separate inflation for cost & payments
+    be_df = calculate_break_even_forecast(
+        df_forecast=forecast_merged_wj,
+        cost_per_visit=cost_visit,
+        monthly_base_overhead=base_overhead,
+        physician_threshold=threshold,
+        monthly_physician_cost=physician_cost,
+        cost_inflation_rate=cost_inflation,
+        payments_inflation_rate=pay_inflation,
+        startup_costs=startup,
+        monthly_grant_income=grant_income,
+        payments_factor=pay_factor
+    )
+
+    be_date = be_df.attrs.get("break_even_date")
+    if be_date is None:
+        be_text = "No break-even within forecast horizon."
+    else:
+        be_text = f"Break-even in {be_date.strftime('%B %Y')}"
+
+    # 2) Build figure (pastel color approach)
+    fig = go.Figure()
+
+    # Cumulative Profit
+    fig.add_trace(go.Scatter(
+        x=be_df["ds"],
+        y=be_df["cumulative_profit"],
+        mode="lines",
+        line=dict(color="#4B8BBE", width=3),
+        fill="tozeroy",
+        fillcolor="rgba(75,139,190,0.2)",
+        name="Cumulative Profit"
+    ))
+
+    # Zero line
+    x_min, x_max = be_df["ds"].min(), be_df["ds"].max()
+    fig.add_trace(go.Scatter(
+        x=[x_min, x_max],
+        y=[0,0],
+        mode="lines",
+        line=dict(color="#FF6E6C", dash="dash", width=2),
+        name="Zero Line"
+    ))
+
+    # Break-even date
+    if be_date:
+        y_min = be_df["cumulative_profit"].min()
+        y_max = be_df["cumulative_profit"].max()
+        fig.add_trace(go.Scatter(
+            x=[be_date, be_date],
+            y=[y_min, y_max],
+            mode="lines",
+            line=dict(color="#72CCA7", dash="dot", width=3),
+            name="Break-Even Date"
+        ))
+
+    # Secondary axis lines: monthly_revenue, etc.
+    fig.add_trace(go.Scatter(
+        x=be_df["ds"],
+        y=be_df["monthly_revenue"],
+        mode="lines",
+        line=dict(color="#ffd97d", width=3),
+        name="Monthly Revenue",
+        yaxis="y2"
+    ))
+    # If needed, keep track of the inflated payment lines separate, but
+    # here we just show monthly_revenue total.
+
+    fig.add_trace(go.Scatter(
+        x=be_df["ds"],
+        y=be_df["fixed_cost"],
+        mode="lines",
+        line=dict(color="#f2b5d4", width=3),
+        name="Fixed Cost",
+        yaxis="y2"
+    ))
+    fig.add_trace(go.Scatter(
+        x=be_df["ds"],
+        y=be_df["variable_cost"],
+        mode="lines",
+        line=dict(color="#c49bbb", width=3),
+        name="Variable Cost",
+        yaxis="y2"
+    ))
+
+    fig.update_layout(
+        title="Break-Even Analysis (Separate Cost & Payments Inflation)",
+        title_x=0.5,
+        template="plotly_white",
+        hovermode="x unified",
+        xaxis_title="Date",
+        yaxis_title="Cumulative Profit ($)",
         height=600,
-        margin=dict(l=60, r=60, t=100, b=60),
+
+        yaxis2=dict(
+            title="Revenue / Costs ($)",
+            overlaying="y",
+            side="right",
+            showgrid=False
+        ),
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=-0.2,
-            xanchor="center",
-            x=0.5
+            y=1.02,
+            xanchor="right",
+            x=1
         )
     )
 
-    return fig
+    return fig, be_text
 
-# Function to preprocess payments data
-def preprocess_payments(df):
-    if 'EncDate' not in df.columns or 'NetPayment' not in df.columns:
-        logger.error("Missing required columns in payments DataFrame.")
-        raise ValueError("Missing required columns in payments DataFrame.")
-
-    # Drop unnecessary columns
-    columns_to_drop = ['UserFirstName', 'UserLastName', 'ProviderName', 'ResourceName']
-    df = df.drop(columns=columns_to_drop, errors='ignore')
-
-    # Rename columns
-    df = df.rename(columns={'EncDate': 'ds', 'NetPayment': 'y'})
-
-    # Ensure datetime
-    df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-
-    # Drop NaNs and select relevant columns
-    df = df[['ds', 'y']].dropna()
-
-    # Remove non-positive payments
-    df = df[df['y'] > 0]
-    logger.info(f"Records after removing non-positive payments: {len(df)}")
-
-    # Aggregate monthly
-    df = df.groupby(pd.Grouper(key='ds', freq='M')).sum().reset_index()
-
-    return df
-
-# Function to preprocess visits data
-def preprocess_visits(df):
-    if 'EncDate' not in df.columns:
-        logger.error("Missing 'EncDate' column in visits DataFrame.")
-        raise ValueError("Missing 'EncDate' column in visits DataFrame.")
-
-    # Rename and ensure datetime
-    df = df.rename(columns={'EncDate': 'ds'})
-    df['ds'] = pd.to_datetime(df['ds'], errors='coerce')
-    df = df.dropna(subset=['ds'])
-
-    # Count visits monthly
-    df = df.groupby(pd.Grouper(key='ds', freq='M')).size().reset_index(name='y')
-
-    # Remove negative visit counts
-    df = df[df['y'] >= 0]
-    logger.info(f"Records after ensuring non-negative visits: {len(df)}")
-
-    return df
-
-# Function to train Prophet model
-def train_prophet(df, periods=60):
-    model = Prophet()
-    model.fit(df)
-    future = model.make_future_dataframe(periods=periods, freq='M')
-    forecast = model.predict(future)
-    return forecast
-
-# Function to calculate performance metrics
-def calculate_metrics(actual, predicted):
-    mae = mean_absolute_error(actual, predicted)
-    mse = mean_squared_error(actual, predicted)
-    rmse = mse ** 0.5
-    mape = mean_absolute_percentage_error(actual, predicted) * 100
-    return {'MAE': mae, 'MSE': mse, 'RMSE': rmse, 'MAPE': mape}
-
-# Function to calculate CAGR
-def calculate_cagr(start_value, end_value, periods_in_years):
-    if start_value <= 0:
-        return None
-    cagr = ((end_value / start_value) ** (1 / periods_in_years) - 1) * 100
-    return cagr
-
-# Function to validate DataFrame
-def validate_dataframe(df, name):
-    if not isinstance(df, pd.DataFrame):
-        logger.error(f"{name} is not a DataFrame.")
-        raise TypeError(f"{name} must be a pandas DataFrame.")
-
-    required_columns = {'ds', 'y'}
-    if not required_columns.issubset(df.columns):
-        logger.error(f"{name} does not contain required columns: {required_columns}")
-        raise ValueError(f"{name} must contain columns: {required_columns}")
-
-    if df[['ds', 'y']].isnull().any().any():
-        logger.error(f"{name} contains NaN values in 'ds' or 'y' columns.")
-        raise ValueError(f"{name} cannot contain NaN values in 'ds' or 'y' columns.")
-
-    if len(df) < 2:
-        logger.error(f"{name} has less than 2 records.")
-        raise ValueError(f"{name} must have at least 2 records for Prophet forecasting.")
-
-# Initialize the Dash app
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-server = app.server  # Expose the Flask server
-
-# Cache data and computations to improve performance
-from flask_caching import Cache
-
-cache = Cache(app.server, config={
-    'CACHE_TYPE': 'filesystem',
-    'CACHE_DIR': 'cache-directory',
-    'CACHE_DEFAULT_TIMEOUT': 300  # Cache timeout in seconds
-})
-
-# Read and preprocess the data (cached)
-@cache.memoize()
-def load_and_process_data():
-    try:
-        # Use relative path and ensure the file exists
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        data_path = os.path.join(BASE_DIR, 'payment.xlsx')
-        payments_df = pd.read_excel(data_path)
-        payments_df = payments_df[payments_df['EncStatus'] == 'CHK']
-        logger.info("Successfully read 'payment.xlsx' and filtered by EncStatus 'CHK'.")
-    except FileNotFoundError:
-        logger.error("The file 'payment.xlsx' was not found.")
-        raise
-    except Exception as e:
-        logger.error(f"Error reading 'payment.xlsx': {e}")
-        raise
-
-    # Filter data for UPFH Family Clinic - West Jordan
-    if 'Facility' not in payments_df.columns:
-        logger.error("Missing 'Facility' column in payments DataFrame.")
-        raise ValueError("Missing 'Facility' column in payments DataFrame.")
-
-    west_jordan_df = payments_df[payments_df['Facility'] == 'UPFH Family Clinic - West Jordan']
-    logger.info(f"Records for 'UPFH Family Clinic - West Jordan': {len(west_jordan_df)}")
-
-    if west_jordan_df.empty:
-        logger.error("No data found for 'UPFH Family Clinic - West Jordan'.")
-        raise ValueError("No data for 'UPFH Family Clinic - West Jordan'.")
-
-    # Preprocess data
-    west_jordan_payments = preprocess_payments(west_jordan_df)
-    west_jordan_visits = preprocess_visits(west_jordan_df)
-    logger.info("Preprocessed payments and visits data for West Jordan Clinic.")
-
-    entire_payments = preprocess_payments(payments_df)
-    entire_visits = preprocess_visits(payments_df)
-    logger.info("Preprocessed payments and visits data for Entire Payments Data Set.")
-
-    # Validate DataFrames
-    validate_dataframe(west_jordan_payments, "west_jordan_payments")
-    validate_dataframe(west_jordan_visits, "west_jordan_visits")
-    validate_dataframe(entire_payments, "entire_payments")
-    validate_dataframe(entire_visits, "entire_visits")
-
-    # Train Prophet models and get forecasts
-    payments_forecast_wj = train_prophet(west_jordan_payments, periods=60)
-    visits_forecast_wj = train_prophet(west_jordan_visits, periods=60)
-    logger.info("Trained Prophet models and generated forecasts for West Jordan Clinic.")
-
-    payments_forecast_entire = train_prophet(entire_payments, periods=60)
-    visits_forecast_entire = train_prophet(entire_visits, periods=60)
-    logger.info("Trained Prophet models and generated forecasts for Entire Payments Data Set.")
-
-    # Calculate metrics
-    payments_metrics_wj = calculate_metrics(west_jordan_payments['y'], payments_forecast_wj['yhat'][:len(west_jordan_payments)])
-    visits_metrics_wj = calculate_metrics(west_jordan_visits['y'], visits_forecast_wj['yhat'][:len(west_jordan_visits)])
-    logger.info("Calculated performance metrics for West Jordan Clinic.")
-
-    payments_metrics_entire = calculate_metrics(entire_payments['y'], payments_forecast_entire['yhat'][:len(entire_payments)])
-    visits_metrics_entire = calculate_metrics(entire_visits['y'], visits_forecast_entire['yhat'][:len(entire_visits)])
-    logger.info("Calculated performance metrics for Entire Payments Data Set.")
-
-    # Calculate Historical CAGR
-    payments_cagr_wj = calculate_cagr(
-        start_value=west_jordan_payments['y'].iloc[0],
-        end_value=west_jordan_payments['y'].iloc[-1],
-        periods_in_years=5
-    )
-
-    visits_cagr_wj = calculate_cagr(
-        start_value=west_jordan_visits['y'].iloc[0],
-        end_value=west_jordan_visits['y'].iloc[-1],
-        periods_in_years=5
-    )
-
-    initial_visitor_cagr = visits_cagr_wj if visits_cagr_wj is not None else 0
-    if visits_cagr_wj is None:
-        logger.warning("Historical Visitor CAGR is undefined. Defaulting to 0%.")
-    else:
-        logger.info(f"Historical Visitor CAGR (West Jordan Clinic, 5 years): {initial_visitor_cagr:.2f}%")
-
-    payments_cagr_entire = calculate_cagr(
-        start_value=entire_payments['y'].iloc[0],
-        end_value=entire_payments['y'].iloc[-1],
-        periods_in_years=5
-    )
-
-    visits_cagr_entire = calculate_cagr(
-        start_value=entire_visits['y'].iloc[0],
-        end_value=entire_visits['y'].iloc[-1],
-        periods_in_years=5
-    )
-
-    initial_visits_cagr_entire = visits_cagr_entire if visits_cagr_entire is not None else 0
-    if visits_cagr_entire is None:
-        logger.warning("Historical Visitor CAGR for Entire Data Set is undefined. Defaulting to 0%.")
-    else:
-        logger.info(f"Historical Visitor CAGR (Entire Data Set, 5 years): {initial_visits_cagr_entire:.2f}%")
-
-    # Calculate Average Payment per Visitor
-    merged_wj = west_jordan_payments.merge(west_jordan_visits, on='ds', suffixes=('_payments', '_visits'))
-    merged_wj['avg_payment_per_visitor'] = merged_wj['y_payments'] / merged_wj['y_visits']
-    average_payment_wj = merged_wj['avg_payment_per_visitor'].mean()
-
-    merged_entire = entire_payments.merge(entire_visits, on='ds', suffixes=('_payments', '_visits'))
-    merged_entire['avg_payment_per_visitor'] = merged_entire['y_payments'] / merged_entire['y_visits']
-    average_payment_entire = merged_entire['avg_payment_per_visitor'].mean()
-
-    return {
-        'west_jordan_payments': west_jordan_payments,
-        'west_jordan_visits': west_jordan_visits,
-        'entire_payments': entire_payments,
-        'entire_visits': entire_visits,
-        'payments_forecast_wj': payments_forecast_wj,
-        'visits_forecast_wj': visits_forecast_wj,
-        'payments_forecast_entire': payments_forecast_entire,
-        'visits_forecast_entire': visits_forecast_entire,
-        'payments_metrics_wj': payments_metrics_wj,
-        'visits_metrics_wj': visits_metrics_wj,
-        'payments_metrics_entire': payments_metrics_entire,
-        'visits_metrics_entire': visits_metrics_entire,
-        'payments_cagr_wj': payments_cagr_wj,
-        'visits_cagr_wj': visits_cagr_wj,
-        'payments_cagr_entire': payments_cagr_entire,
-        'visits_cagr_entire': visits_cagr_entire,
-        'initial_visitor_cagr': initial_visitor_cagr,
-        'initial_visits_cagr_entire': initial_visits_cagr_entire,
-        'average_payment_wj': average_payment_wj,
-        'average_payment_entire': average_payment_entire,
-    }
-
-# Load data and computations
-data = load_and_process_data()
-
-# Precompute forecast graphs (cached)
-@cache.memoize()
-def get_forecast_figures():
-    payments_fig_wj = create_prophet_forecast_graph(
-        actual_df=data['west_jordan_payments'],
-        forecast_df=data['payments_forecast_wj'],
-        title="Payments Forecast for West Jordan Clinic",
-        y_title="Payments ($)",
-        actual_name="Actual Payments",
-        forecast_name="Forecasted Payments",
-        rmse=data['payments_metrics_wj']['RMSE'],
-        mape=data['payments_metrics_wj']['MAPE'],
-        cagr=data['payments_cagr_wj'] if data['payments_cagr_wj'] is not None else 0
-    )
-
-    visits_fig_wj = create_prophet_forecast_graph(
-        actual_df=data['west_jordan_visits'],
-        forecast_df=data['visits_forecast_wj'],
-        title="Visits Forecast for West Jordan Clinic",
-        y_title="Visits",
-        actual_name="Actual Visits",
-        forecast_name="Forecasted Visits",
-        rmse=data['visits_metrics_wj']['RMSE'],
-        mape=data['visits_metrics_wj']['MAPE'],
-        cagr=data['initial_visitor_cagr']
-    )
-
-    payments_fig_entire = create_prophet_forecast_graph(
-        actual_df=data['entire_payments'],
-        forecast_df=data['payments_forecast_entire'],
-        title="Payments Forecast for Entire Data Set",
-        y_title="Payments ($)",
-        actual_name="Actual Payments",
-        forecast_name="Forecasted Payments",
-        rmse=data['payments_metrics_entire']['RMSE'],
-        mape=data['payments_metrics_entire']['MAPE'],
-        cagr=data['payments_cagr_entire'] if data['payments_cagr_entire'] is not None else 0
-    )
-
-    visits_fig_entire = create_prophet_forecast_graph(
-        actual_df=data['entire_visits'],
-        forecast_df=data['visits_forecast_entire'],
-        title="Visits Forecast for Entire Data Set",
-        y_title="Visits",
-        actual_name="Actual Visits",
-        forecast_name="Forecasted Visits",
-        rmse=data['visits_metrics_entire']['RMSE'],
-        mape=data['visits_metrics_entire']['MAPE'],
-        cagr=data['visits_cagr_entire'] if data['visits_cagr_entire'] is not None else 0
-    )
-
-    return payments_fig_wj, visits_fig_wj, payments_fig_entire, visits_fig_entire
-
-payments_fig_wj, visits_fig_wj, payments_fig_entire, visits_fig_entire = get_forecast_figures()
-
-# Define the Dash app layout
-app.layout = dbc.Container([
-    html.H1("Clinic Forecasting and Break-Even Analysis Dashboard", className="text-center text-primary mb-4"),
-    html.Hr(),
-
-    # Alert for errors
-    dbc.Alert(
-        id='error-message',
-        is_open=False,
-        duration=4000,
-        color='danger',
-        children=[]
-    ),
-
-    # Input Parameters (Assumptions)
-    dbc.Row([
-        dbc.Col([
-            html.H3("Assumptions", className="mb-3"),
-            dbc.Card([
-                dbc.CardBody([
-                    # Average Cost Per Visitor Input
-                    dbc.Row([
-                        dbc.Col(html.Label("Average Cost Per Visitor ($):"), width=6),
-                        dbc.Col(
-                            dcc.Input(
-                                id='cost-per-visit',
-                                type='number',
-                                value=220,
-                                min=0,
-                                step=10,
-                                style={'width': '100%'}
-                            ),
-                            width=6,
-                        ),
-                    ], className="mb-3"),
-                    # Average Payment Per Visitor Input
-                    dbc.Row([
-                        dbc.Col(html.Label("Average Payment Per Visitor ($):"), width=6),
-                        dbc.Col(
-                            dcc.Input(
-                                id='avg-payment-per-visitor',
-                                type='number',
-                                value=round(data['average_payment_wj'], 2),
-                                min=0,
-                                step=10,
-                                style={'width': '100%'}
-                            ),
-                            width=6,
-                        ),
-                    ], className="mb-3"),
-                    # Initial Visitors Input
-                    dbc.Row([
-                        dbc.Col(html.Label("Initial Visitors:"), width=6),
-                        dbc.Col(
-                            dcc.Input(
-                                id='initial-visitors',
-                                type='number',
-                                value=int(data['west_jordan_visits']['y'].iloc[-1]),
-                                min=0,
-                                step=1,
-                                style={'width': '100%'}
-                            ),
-                            width=6,
-                        ),
-                    ], className="mb-3"),
-                    # Start-Up Costs Input
-                    dbc.Row([
-                        dbc.Col(html.Label("Start-Up Costs ($):"), width=6),
-                        dbc.Col(
-                            dcc.Input(
-                                id='startup-costs',
-                                type='number',
-                                value=10000,
-                                min=0,
-                                step=100,
-                                style={'width': '100%'}
-                            ),
-                            width=6,
-                        ),
-                    ], className="mb-3"),
-                    # Visitor CAGR Growth Rate Input
-                    dbc.Row([
-                        dbc.Col(html.Label("Visitor CAGR Growth Rate (%):"), width=6),
-                        dbc.Col(
-                            dcc.Input(
-                                id='visitor-cagr',
-                                type='number',
-                                value=round(data['initial_visitor_cagr'], 2),
-                                min=-100,
-                                max=100,
-                                step=0.1,
-                                style={'width': '100%'}
-                            ),
-                            width=6,
-                        ),
-                    ], className="mb-3"),
-                    # Refresh Button
-                    dbc.Row([
-                        dbc.Col(
-                            dbc.Button("Refresh Assumptions", id="refresh-button", color="primary", className="mt-2"),
-                            width=12,
-                            className="text-center"
-                        ),
-                    ], className="mb-3"),
-                ])
-            ], className="mb-4"),
-        ], width=12),
-    ]),
-
-    # Break-Even Analysis Section
-    dbc.Row([
-        dbc.Col([
-            html.H3("Break-Even Analysis - West Jordan Clinic", className="mb-3"),
-            dcc.Graph(id='break-even-graph'),
-            dbc.Card([
-                dbc.CardHeader(html.H5("Break-Even Metrics")),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Strong("BEP (Visits):"), width=3),
-                        dbc.Col(id='bea-bep-visits', width=3),
-                        dbc.Col(html.Strong("BEP ($):"), width=3),
-                        dbc.Col(id='bea-bep-dollars', width=3),
-                    ], className="mb-2"),
-                    dbc.Row([
-                        dbc.Col(html.Strong("Time to BEP:"), width=3),
-                        dbc.Col(id='bea-time-to-bep', width=3),
-                    ])
-                ])
-            ], className="mb-4"),
-        ], width=12),
-    ]),
-
-    # Individual Forecast Graphs with Metrics
-    dbc.Row([
-        # Payments Forecast - West Jordan Clinic
-        dbc.Col([
-            html.H3("Payments Forecast (West Jordan Clinic)", className="mb-3"),
-            dcc.Graph(figure=payments_fig_wj, id='payments-forecast-wj'),
-            dbc.Card([
-                dbc.CardHeader(html.H5("Metrics")),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(f"{data['payments_metrics_wj']['RMSE']:.2f}", width=3),
-                        dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(f"{data['payments_metrics_wj']['MAPE']:.2f}%", width=3),
-                    ], className="mb-2"),
-                    dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(f"{data['payments_cagr_wj']:.2f}%" if data['payments_cagr_wj'] else "N/A", width=3),
-                    ], className="mb-2"),
-                    # Average Payment per Visitor Metric
-                    dbc.Row([
-                        dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=3),
-                        dbc.Col(f"${data['average_payment_wj']:.2f}", width=3),
-                    ], className="mb-2"),
-                ])
-            ], className="mb-4"),
-        ], width=6),
-
-        # Visits Forecast - West Jordan Clinic
-        dbc.Col([
-            html.H3("Visits Forecast (West Jordan Clinic)", className="mb-3"),
-            dcc.Graph(figure=visits_fig_wj, id='visits-forecast-wj'),
-            dbc.Card([
-                dbc.CardHeader(html.H5("Metrics")),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(f"{data['visits_metrics_wj']['RMSE']:.2f}", width=3),
-                        dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(f"{data['visits_metrics_wj']['MAPE']:.2f}%", width=3),
-                    ], className="mb-2"),
-                    dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(f"{data['initial_visitor_cagr']:.2f}%", width=3),
-                    ], className="mb-2"),
-                ])
-            ], className="mb-4"),
-        ], width=6),
-    ]),
-
-    dbc.Row([
-        # Payments Forecast - Entire Data Set
-        dbc.Col([
-            html.H3("Payments Forecast (Entire Data Set)", className="mb-3"),
-            dcc.Graph(figure=payments_fig_entire, id='payments-forecast-entire'),
-            dbc.Card([
-                dbc.CardHeader(html.H5("Metrics")),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(f"{data['payments_metrics_entire']['RMSE']:.2f}", width=3),
-                        dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(f"{data['payments_metrics_entire']['MAPE']:.2f}%", width=3),
-                    ], className="mb-2"),
-                    dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(f"{data['payments_cagr_entire']:.2f}%" if data['payments_cagr_entire'] else "N/A", width=3),
-                    ], className="mb-2"),
-                    # Average Payment per Visitor Metric
-                    dbc.Row([
-                        dbc.Col(html.Strong("Avg Payment per Visitor ($):"), width=3),
-                        dbc.Col(f"${data['average_payment_entire']:.2f}", width=3),
-                    ], className="mb-2"),
-                ])
-            ], className="mb-4"),
-        ], width=6),
-
-        # Visits Forecast - Entire Data Set
-        dbc.Col([
-            html.H3("Visits Forecast (Entire Data Set)", className="mb-3"),
-            dcc.Graph(figure=visits_fig_entire, id='visits-forecast-entire'),
-            dbc.Card([
-                dbc.CardHeader(html.H5("Metrics")),
-                dbc.CardBody([
-                    dbc.Row([
-                        dbc.Col(html.Strong("RMSE:"), width=3),
-                        dbc.Col(f"{data['visits_metrics_entire']['RMSE']:.2f}", width=3),
-                        dbc.Col(html.Strong("MAPE:"), width=3),
-                        dbc.Col(f"{data['visits_metrics_entire']['MAPE']:.2f}%", width=3),
-                    ], className="mb-2"),
-                    dbc.Row([
-                        dbc.Col(html.Strong("CAGR:"), width=3),
-                        dbc.Col(f"{data['visits_cagr_entire']:.2f}%" if data['visits_cagr_entire'] else "N/A", width=3),
-                    ], className="mb-2"),
-                ])
-            ], className="mb-4"),
-        ], width=6),
-    ]),
-
-    # Download Buttons
-    dbc.Row([
-        dbc.Col([
-            dbc.Button("Download Payments Forecast (West Jordan)", id="download-payments-wj-button", color="primary",
-                       className="mr-2"),
-            dcc.Download(id="download-payments-wj-data"),
-        ], width=6),
-        dbc.Col([
-            dbc.Button("Download Visits Forecast (West Jordan)", id="download-visits-wj-button", color="primary",
-                       className="mr-2"),
-            dcc.Download(id="download-visits-wj-data"),
-        ], width=6),
-    ], className="mb-4"),
-
-    dbc.Row([
-        dbc.Col([
-            dbc.Button("Download Payments Forecast (Entire Data Set)", id="download-payments-entire-button",
-                       color="primary", className="mr-2"),
-            dcc.Download(id="download-payments-entire-data"),
-        ], width=6),
-        dbc.Col([
-            dbc.Button("Download Visits Forecast (Entire Data Set)", id="download-visits-entire-button",
-                       color="primary", className="mr-2"),
-            dcc.Download(id="download-visits-entire-data"),
-        ], width=6),
-    ], className="mb-4"),
-
-    # Help Modal
-    dbc.Row([
-        dbc.Col([
-            dbc.Button("Help", id="open-help", n_clicks=0, className="mb-4"),
-            dbc.Modal([
-                dbc.ModalHeader(dbc.ModalTitle("Help")),
-                dbc.ModalBody(
-                    "This dashboard provides forecasts and break-even analysis for the West Jordan Clinic and the entire payments data set. "
-                    "Adjust the assumptions to see how they affect the financial projections. "
-                    "Click the 'Refresh Assumptions' button to apply your changes."
-                ),
-                dbc.ModalFooter(
-                    dbc.Button("Close", id="close-help", className="ml-auto")
-                ),
-            ], id="help-modal", is_open=False),
-        ], width=12),
-    ]),
-
-], fluid=True)
-
-# Callback functions
-# Include your callback functions here
-# For brevity, they are not included in this snippet
-
-# Run the app
-if __name__ == '__main__':
-    # For local development
+if __name__ == "__main__":
     app.run_server(debug=True)

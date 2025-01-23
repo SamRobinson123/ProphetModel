@@ -7,4 +7,11 @@ prophet
 scikit-learn
 plotly
 gunicorn
+dash
+dash_bootstrap_components
+pandas
+plotly
+prophet
+scikit-learn
+openpyxl
 
